@@ -4,6 +4,7 @@ import { smartCrush, DEFAULT_CONFIG as CRUSHER_CONFIG } from "./src/smart-crushe
 import { analyzeCacheAlignment } from "./src/cache-aligner.ts";
 import { compressCode as astCompressCode } from "./src/code-compressor.ts";
 import { applyReadLifecycle, DEFAULT_READ_LIFECYCLE_CONFIG } from "./src/read-lifecycle.ts";
+import { shapeOutput, DEFAULT_OUTPUT_SHAPER_CONFIG } from "./src/output-shaper.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
 // HEADROOM-COMPRESS: Pure TypeScript context compression extension
@@ -712,6 +713,16 @@ const factory: ExtensionFactory = (pi) => {
       modified = true;
       stats.strategyCounts["read_lifecycle_stale"] = (stats.strategyCounts["read_lifecycle_stale"] || 0) + lifecycle.readsStale;
       stats.strategyCounts["read_lifecycle_superseded"] = (stats.strategyCounts["read_lifecycle_superseded"] || 0) + lifecycle.readsSuperseded;
+    }
+
+    // Phase 0.5: Output Shaper — reduce output tokens via verbosity steering + effort routing
+    const shaped = shapeOutput(payload as Record<string, unknown>, DEFAULT_OUTPUT_SHAPER_CONFIG);
+    if (shaped.changed) {
+      modified = true;
+      items = (shaped.payload.input ?? items) as InputItem[];
+      for (const label of shaped.labels) {
+        stats.strategyCounts[label] = (stats.strategyCounts[label] || 0) + 1;
+      }
     }
 
     const compressed = items.map((item) => {
