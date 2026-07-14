@@ -3,6 +3,7 @@ import { CCRStore, formatCCRMarker, extractCCRHash } from "./src/ccr-store.ts";
 import { smartCrush, DEFAULT_CONFIG as CRUSHER_CONFIG } from "./src/smart-crusher.ts";
 import { analyzeCacheAlignment } from "./src/cache-aligner.ts";
 import { compressCode as astCompressCode } from "./src/code-compressor.ts";
+import { applyReadLifecycle, DEFAULT_READ_LIFECYCLE_CONFIG } from "./src/read-lifecycle.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
 // HEADROOM-COMPRESS: Pure TypeScript context compression extension
@@ -700,9 +701,18 @@ const factory: ExtensionFactory = (pi) => {
     const ctx = _ctx as any;
 
     stats.requestCount++;
-    const items = payload.input as InputItem[];
+    let items = payload.input as InputItem[];
     let modified = false;
     let totalOriginal = 0, totalCompressed = 0;
+
+    // Phase 0: Read Lifecycle — replace stale/superseded reads with markers
+    const lifecycle = applyReadLifecycle(items, DEFAULT_READ_LIFECYCLE_CONFIG, ccrStore);
+    if (lifecycle.modified) {
+      items = lifecycle.items as InputItem[];
+      modified = true;
+      stats.strategyCounts["read_lifecycle_stale"] = (stats.strategyCounts["read_lifecycle_stale"] || 0) + lifecycle.readsStale;
+      stats.strategyCounts["read_lifecycle_superseded"] = (stats.strategyCounts["read_lifecycle_superseded"] || 0) + lifecycle.readsSuperseded;
+    }
 
     const compressed = items.map((item) => {
       const itemType = item.type ?? item.role ?? "";
@@ -753,7 +763,7 @@ const factory: ExtensionFactory = (pi) => {
       return item;
     });
 
-    stats.totalOriginalChars += totalOriginal;
+    stats.totalOriginalChars += totalOriginal + lifecycle.charsSaved;
     stats.totalCompressedChars += totalCompressed;
 
     // Update footer status
