@@ -686,6 +686,12 @@ const factory: ExtensionFactory = (pi) => {
     strategyCounts: {},
   };
 
+  // Show initial status on session start
+  pi.on("session_start" as any, async (_event: any, ctx: any) => {
+    try { ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats)); } catch {}
+    return undefined;
+  });
+
   pi.on("before_provider_request", async (event, _ctx) => {
     if (!stats.enabled) return undefined;
     const payload = event.payload as RequestPayload | undefined;
@@ -787,6 +793,7 @@ const factory: ExtensionFactory = (pi) => {
     handler: async (_args: string, ctx: any) => {
       stats.enabled = !stats.enabled;
       ctx.ui.notify(`headroom-compress: ${stats.enabled ? "✅ enabled" : "❌ disabled"}`, "info");
+      ctx.ui.setStatus?.(STATUS_SLOT, formatFooterStatus(stats));
     },
   });
 
