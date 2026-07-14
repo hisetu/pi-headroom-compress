@@ -664,6 +664,16 @@ function setItemText(item: InputItem, text: string): InputItem {
   return item;
 }
 
+const STATUS_SLOT = "headroom-compress";
+
+function formatFooterStatus(stats: Stats): string {
+  if (!stats.enabled) return "compress: off";
+  if (stats.requestCount === 0) return "compress: ready";
+  const saved = stats.totalOriginalChars - stats.totalCompressedChars;
+  const pct = stats.totalOriginalChars > 0 ? ((saved / stats.totalOriginalChars) * 100).toFixed(0) : "0";
+  return `compress: -${pct}% (${(saved / 1000).toFixed(0)}k saved)`;
+}
+
 const factory: ExtensionFactory = (pi) => {
   const stats: Stats = {
     enabled: true,
@@ -680,6 +690,8 @@ const factory: ExtensionFactory = (pi) => {
     if (!stats.enabled) return undefined;
     const payload = event.payload as RequestPayload | undefined;
     if (!payload?.input || !Array.isArray(payload.input)) return undefined;
+
+    const ctx = _ctx as any;
 
     stats.requestCount++;
     const items = payload.input as InputItem[];
@@ -737,6 +749,9 @@ const factory: ExtensionFactory = (pi) => {
 
     stats.totalOriginalChars += totalOriginal;
     stats.totalCompressedChars += totalCompressed;
+
+    // Update footer status
+    try { ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats)); } catch {}
 
     if (modified) {
       stats.compressedCount++;
