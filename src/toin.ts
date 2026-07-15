@@ -118,7 +118,8 @@ export interface TOINConfig {
 
 export const DEFAULT_TOIN_CONFIG: TOINConfig = {
   enabled: true,
-  storagePath: join(homedir(), ".headroom", "toin.json"),
+  // Keep Pi observations separate from Headroom's Python snake_case schema.
+  storagePath: join(homedir(), ".headroom", "pi-toin.json"),
   autoSaveInterval: 5 * 60 * 1000, // 5 minutes
   minObservationsForRecommendation: 10,
 };
@@ -210,8 +211,13 @@ export class TOIN {
     const strategies: Record<string, number> = {};
 
     for (const pattern of this.patterns.values()) {
-      totalCompressions += pattern.totalCompressions;
-      strategies[pattern.optimalStrategy] = (strategies[pattern.optimalStrategy] || 0) + 1;
+      const count = Number(pattern.totalCompressions);
+      if (Number.isFinite(count) && count > 0) totalCompressions += count;
+
+      const strategy = typeof pattern.optimalStrategy === "string" && pattern.optimalStrategy.trim()
+        ? pattern.optimalStrategy
+        : "unknown";
+      strategies[strategy] = (strategies[strategy] || 0) + 1;
     }
 
     return { patternCount: this.patterns.size, totalCompressions, topStrategies: strategies };
@@ -224,7 +230,34 @@ export class TOIN {
       const data = JSON.parse(readFileSync(this.config.storagePath, "utf-8"));
       if (data.patterns && typeof data.patterns === "object") {
         for (const [key, val] of Object.entries(data.patterns)) {
-          this.patterns.set(key, val as ToolPattern);
+          if (!val || typeof val !== "object") continue;
+          const raw = val as Record<string, unknown>;
+          const fallback = newPattern(key);
+          const numberValue = (camel: string, snake: string, defaultValue: number): number => {
+            const value = Number(raw[camel] ?? raw[snake]);
+            return Number.isFinite(value) ? value : defaultValue;
+          };
+          const stringValue = (camel: string, snake: string, defaultValue: string): string => {
+            const value = raw[camel] ?? raw[snake];
+            return typeof value === "string" && value.trim() ? value : defaultValue;
+          };
+          const rates = raw.strategySuccessRates ?? raw.strategy_success_rates;
+
+          this.patterns.set(key, {
+            signatureHash: stringValue("signatureHash", "tool_signature_hash", key),
+            totalCompressions: numberValue("totalCompressions", "total_compressions", fallback.totalCompressions),
+            totalItemsSeen: numberValue("totalItemsSeen", "total_items_seen", fallback.totalItemsSeen),
+            totalItemsKept: numberValue("totalItemsKept", "total_items_kept", fallback.totalItemsKept),
+            avgCompressionRatio: numberValue("avgCompressionRatio", "avg_compression_ratio", fallback.avgCompressionRatio),
+            avgTokenReduction: numberValue("avgTokenReduction", "avg_token_reduction", fallback.avgTokenReduction),
+            optimalStrategy: stringValue("optimalStrategy", "optimal_strategy", fallback.optimalStrategy),
+            strategySuccessRates: rates && typeof rates === "object"
+              ? rates as Record<string, number>
+              : fallback.strategySuccessRates,
+            optimalMaxItems: numberValue("optimalMaxItems", "optimal_max_items", fallback.optimalMaxItems),
+            confidence: numberValue("confidence", "confidence", fallback.confidence),
+            lastUpdated: numberValue("lastUpdated", "last_updated", fallback.lastUpdated),
+          });
         }
       }
     } catch {}

@@ -18,7 +18,8 @@
     ]
   },
   "scripts": {
-    "benchmark": "node benchmark/compare.mjs"
+    "benchmark": "node benchmark/compare.mjs",
+    "test": "node --experimental-strip-types test/toin.mjs"
   },
   "dependencies": {
     "tree-sitter": "^0.25.0",
