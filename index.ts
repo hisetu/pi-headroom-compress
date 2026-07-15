@@ -5,14 +5,16 @@ import { analyzeCacheAlignment } from "./src/cache-aligner.ts";
 import { compressCode as astCompressCode } from "./src/code-compressor.ts";
 import { applyReadLifecycle, DEFAULT_READ_LIFECYCLE_CONFIG } from "./src/read-lifecycle.ts";
 import { shapeOutput, DEFAULT_OUTPUT_SHAPER_CONFIG } from "./src/output-shaper.ts";
+import { TOIN, DEFAULT_TOIN_CONFIG, computeSignature } from "./src/toin.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
 // HEADROOM-COMPRESS: Pure TypeScript context compression extension
 // Implements Headroom-equivalent algorithms without external dependencies
 // ═══════════════════════════════════════════════════════════════════════
 
-// Global CCR store instance
+// Global instances
 const ccrStore = new CCRStore();
+const toin = new TOIN();
 
 // ─── Content Type Detection (port of content_detector.py) ────────────
 
@@ -743,6 +745,15 @@ const factory: ExtensionFactory = (pi) => {
             ? result.compressed.slice(0, stats.maxOutputChars / 2) + `\n⟨${result.compressed.length - stats.maxOutputChars} chars omitted⟩\n` + result.compressed.slice(-stats.maxOutputChars / 2)
             : result.compressed;
           totalCompressed += final.length;
+          // Record to TOIN
+          try {
+            const parsed = JSON.parse(cleaned);
+            if (Array.isArray(parsed)) {
+              toin.recordCompression(computeSignature(parsed), parsed.length, 0, cleaned.length, final.length, result.strategy);
+            }
+          } catch {
+            toin.recordCompression({ structureHash: "text", fieldCount: 0, hasNestedObjects: false, hasArrays: false, maxDepth: 0, hasErrorField: false, hasIdField: false, hasTimestampField: false }, 1, 1, cleaned.length, final.length, result.strategy);
+          }
           return setItemText(item, final);
         }
         // Even if router didn't modify, apply size cap
@@ -903,6 +914,28 @@ const factory: ExtensionFactory = (pi) => {
         "info"
       );
     },
+  });
+
+  pi.registerCommand("headroom-toin-status", {
+    description: "Show TOIN learning stats",
+    handler: async (_args: string, ctx: any) => {
+      const s = toin.stats();
+      const strategies = Object.entries(s.topStrategies).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+      ctx.ui.notify(
+        [
+          `TOIN: ${s.patternCount} tool patterns learned`,
+          `Total compressions recorded: ${s.totalCompressions}`,
+          strategies ? `Top strategies:\n${strategies}` : "",
+        ].filter(Boolean).join("\n"),
+        "info"
+      );
+    },
+  });
+
+  // Save TOIN on session shutdown
+  pi.on("session_shutdown" as any, async () => {
+    toin.save();
+    return undefined;
   });
 };
 
