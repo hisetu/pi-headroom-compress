@@ -6,6 +6,7 @@ import { compressCode as astCompressCode } from "./src/code-compressor.ts";
 import { applyReadLifecycle, DEFAULT_READ_LIFECYCLE_CONFIG } from "./src/read-lifecycle.ts";
 import { shapeOutput, DEFAULT_OUTPUT_SHAPER_CONFIG } from "./src/output-shaper.ts";
 import { TOIN, DEFAULT_TOIN_CONFIG, computeSignature } from "./src/toin.ts";
+import { kompressText, isKompressAvailable, DEFAULT_KOMPRESS_CONFIG } from "./src/kompress.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
 // HEADROOM-COMPRESS: Pure TypeScript context compression extension
@@ -590,14 +591,22 @@ function compressContent(content: string, query = ""): { compressed: string; was
     case "search":
       const searchResult = compressSearch(content);
       return { compressed: searchResult, wasModified: searchResult !== content, strategy: "search_compressor" };
-    default:
-      // Plain text: mid-truncate if very large
+    default: {
+      // Plain text: try Kompress ML first
+      if (content.length >= DEFAULT_KOMPRESS_CONFIG.minCharsToCompress) {
+        const kr = kompressText(content);
+        if (kr.wasModified) {
+          return { compressed: kr.compressed, wasModified: true, strategy: "kompress_ml" };
+        }
+      }
+      // Fallback: mid-truncate if very large
       if (content.length > 16000) {
         const half = 7000;
         const compressed = content.slice(0, half) + `\n\n⟨${(content.length - half * 2).toLocaleString()} chars omitted by headroom-compress⟩\n\n` + content.slice(-half);
         return { compressed, wasModified: true, strategy: "text_truncate" };
       }
       return { compressed: content, wasModified: false, strategy: "passthrough" };
+    }
   }
 }
 
