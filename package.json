@@ -17,6 +17,9 @@
       "./index.ts"
     ]
   },
+  "scripts": {
+    "benchmark": "node benchmark/compare.mjs"
+  },
   "dependencies": {
     "tree-sitter": "^0.25.0",
     "tree-sitter-c": "^0.24.1",

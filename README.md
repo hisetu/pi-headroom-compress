@@ -108,9 +108,25 @@ Default settings (adjustable via `/headroom-compress-config`):
 | Network | ❌ Needs proxy reachable | ✅ Local, zero network |
 | WebSocket | ❌ Relay issues | ✅ Not involved |
 | gpt-5.4 via Copilot | ❌ Blocked | ✅ Works |
-| Compression quality | ✅ Rust + ML models | ✅ Same algorithms (minus Kompress ML) |
+| Compression quality | ✅ Rust + ML models | ✅ Same core algorithms; Kompress via local Python subprocess |
 | Multi-machine sharing | ✅ Centralized | ❌ Per-machine |
 | Setup | Medium (k8s/Docker) | Simple (`npm install`) |
+
+## Benchmark
+
+Run the end-to-end comparison against the installed Python Headroom package:
+
+```bash
+npm run benchmark
+```
+
+The benchmark imports the extension's real TypeScript `compressContent()` function—there is no benchmark-only reimplementation. It reports:
+
+- character-weighted compression savings;
+- the strategy selected by each implementation;
+- retention of predefined critical markers such as errors, stack frames, symbols, filenames, and diff changes.
+
+These synthetic checks measure compression and basic information retention, not model-answer correctness. Use real task A/B evaluation before making a general quality claim.
 
 ## License
 

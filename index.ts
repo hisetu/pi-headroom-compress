@@ -561,7 +561,7 @@ function compressSearch(content: string, maxResults = 20): string {
 
 // ─── Main Compression Router ─────────────────────────────────────────
 
-function compressContent(content: string, query = ""): { compressed: string; wasModified: boolean; strategy: string } {
+export function compressContent(content: string, query = ""): { compressed: string; wasModified: boolean; strategy: string } {
   if (!content || content.length < 500) return { compressed: content, wasModified: false, strategy: "passthrough" };
 
   const detection = detectContentType(content);
