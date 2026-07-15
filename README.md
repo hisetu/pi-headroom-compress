@@ -128,18 +128,6 @@ Default settings (adjustable via `/headroom-compress-config`):
 | Code target rate | 0.2 | Keep ~20% of function bodies |
 | CCR TTL | 30 minutes | How long originals are cached |
 
-## Comparison with Headroom Proxy
-
-| | Headroom Proxy | This Extension |
-|---|---|---|
-| Auth handling | ❌ Complex (integrator issues) | ✅ None (Pi handles it) |
-| Network | ❌ Needs proxy reachable | ✅ Local, zero network |
-| WebSocket | ❌ Relay issues | ✅ Not involved |
-| gpt-5.4 via Copilot | ❌ Blocked | ✅ Works |
-| Compression quality | ✅ Rust + ML models | ✅ Same core algorithms; Kompress via local Python subprocess |
-| Multi-machine sharing | ✅ Centralized | ❌ Per-machine |
-| Setup | Medium (k8s/Docker) | Simple (`npm install`) |
-
 ## Benchmark
 
 Run the end-to-end comparison against the installed Python Headroom package:
