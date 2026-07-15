@@ -274,7 +274,7 @@ const DEFAULT_LOG_CONFIG: LogConfig = {
   maxStackTraces: 3,
   stackTraceMaxLines: 20,
   errorContextLines: 3,
-  maxTotalLines: 100,
+  maxTotalLines: 50,
   dedupeWarnings: true,
 };
 
@@ -525,7 +525,7 @@ function compressCode(content: string): string {
 
 // ─── Search Results Compressor ───────────────────────────────────────
 
-function compressSearch(content: string, maxResults = 30): string {
+function compressSearch(content: string, maxResults = 20): string {
   const lines = content.split("\n");
   if (lines.length <= maxResults) return content;
 

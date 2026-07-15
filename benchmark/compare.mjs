@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * Benchmark: compare our compression vs Headroom (Python)
+ * Benchmark: pi-headroom-compress vs Headroom (Python)
  * Usage: node benchmark/compare.mjs
  */
 import { execFileSync } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 
 const PYTHON = join(homedir(), ".local/share/uv/tools/headroom-ai/bin/python");
-const TMP = join(tmpdir(), "hc-bench-input.json");
+const TMP_INPUT = join(tmpdir(), "hc-bench-input.txt");
+const TMP_SCRIPT = join(tmpdir(), "hc-bench-ours.js");
 
 const samples = [
   { name: "JSON array (50 items)", type: "json_array", content: JSON.stringify(Array.from({length:50},(_,i)=>({file:`/src/m${i}.ts`,line:i*10,content:`export function h${i}() { return ${i}; }`,score:Math.random().toFixed(3)})),null,2) },
@@ -20,12 +21,74 @@ const samples = [
   { name: "Plain text (3KB)", type: "text", content: Array.from({length:30},(_,i)=>`Section ${i}: Detailed explanation of feature ${i}. Uses caching, lazy eval, memoization for performance. Requires config via settings panel.`).join("\n\n") },
 ];
 
+// Our compression script (written to temp file to avoid escaping hell)
+const OUR_SCRIPT = `
+const fs = require("fs");
+const content = fs.readFileSync(process.argv[2], "utf-8");
+const orig = content.length;
+let comp = content, strat = "passthrough";
+const t = content.trim();
+const lines = content.split("\\n");
+
+if (t.startsWith("[")) {
+  try {
+    const a = JSON.parse(t);
+    if (Array.isArray(a) && a.length > 15) {
+      const k = [...a.slice(0, 5), ...a.slice(-3)];
+      k.push({ _c: (a.length - 8) + " omit" });
+      comp = JSON.stringify(k, null, 1);
+      strat = "smart_crusher";
+    }
+  } catch {}
+} else if (/^diff --git/m.test(content)) {
+  const o = [];
+  let ctx = 0;
+  for (const l of lines) {
+    if (/^(diff |---|\\+\\+\\+|@@|\\+|-)/.test(l)) { o.push(l); ctx = 0; }
+    else { ctx++; if (ctx <= 2) o.push(l); }
+  }
+  comp = o.join("\\n");
+  strat = "diff";
+} else if (lines.slice(0, 100).filter(l => /(ERROR|WARN|INFO|FAIL|DEBUG)/i.test(l)).length > 5) {
+  const errs = lines.filter(l => /ERROR|FAIL|Traceback|^\s*at\\s/i.test(l));
+  const warns = lines.filter(l => /WARN/i.test(l)).slice(0, 5);
+  const summ = lines.filter(l => /^Build|^Total|^===/i.test(l));
+  const kept = [...errs.slice(0, 10), ...warns, ...summ];
+  if (kept.length < lines.length) {
+    kept.push("[" + (lines.length - kept.length) + " lines omitted]");
+    comp = kept.join("\\n");
+    strat = "log";
+  }
+} else if (lines.filter(l => /^[^\\s:]+:\\d+:/.test(l)).length > lines.length * 0.3) {
+  const g = new Map();
+  for (const l of lines) {
+    const m = l.match(/^([^:]+):/);
+    if (m) { if (!g.has(m[1])) g.set(m[1], []); g.get(m[1]).push(l); }
+  }
+  const o = [];
+  for (const [, v] of g) { o.push(...v.slice(0, 3)); if (v.length > 3) o.push("  ...(" + (v.length - 3) + " more)"); }
+  comp = o.join("\\n");
+  strat = "search";
+} else if (lines.slice(0, 50).filter(l => /^\s*(def|class|func|fn|import|const|let)\\s/.test(l)).length > 3) {
+  comp = lines.filter(l => { const x = l.trim(); return x && !x.startsWith("#") && !x.startsWith("//"); }).join("\\n");
+  strat = "code";
+}
+
+if (comp.length > 16000 && strat === "passthrough") {
+  comp = content.slice(0, 7000) + "\\n[truncated]\\n" + content.slice(-7000);
+  strat = "truncate";
+}
+console.log(JSON.stringify({ original: orig, compressed: comp.length, strategy: strat, modified: comp !== content }));
+`;
+
+writeFileSync(TMP_SCRIPT, OUR_SCRIPT);
+
 function headroomCompress(content, type) {
-  writeFileSync(TMP, JSON.stringify({content, type}));
+  writeFileSync(TMP_INPUT, JSON.stringify({content, type}));
   try {
     const out = execFileSync(PYTHON, ["-c", `
 import json
-d = json.loads(open("${TMP}").read())
+d = json.loads(open("${TMP_INPUT}").read())
 content, ctype = d["content"], d["type"]
 result = {"original": len(content)}
 try:
@@ -59,23 +122,10 @@ print(json.dumps(result))
   } catch(e) { return {error: e.message?.slice(0,100)}; }
 }
 
-function oursCompress(content, type) {
-  writeFileSync(TMP, content);
+function oursCompress(content) {
+  writeFileSync(TMP_INPUT, content);
   try {
-    const out = execFileSync("node", ["-e", `
-const fs=require("fs");
-const content=fs.readFileSync("${TMP}","utf-8");
-const orig=content.length;
-let comp=content,strat="passthrough";
-const t=content.trim();
-if(t.startsWith("[")){try{const a=JSON.parse(t);if(Array.isArray(a)&&a.length>15){const k=[...a.slice(0,5),...a.slice(-3)];k.push({_c:(a.length-8)+" omit"});comp=JSON.stringify(k,null,1);strat="smart_crusher";}}catch{}}
-else if(/^diff --git/m.test(content)){const ls=content.split("\\n"),o=[];let c=0;for(const l of ls){if(/^(diff |---|\\+\\+\\+|@@|\\+|-)/.test(l)){o.push(l);c=0;}else{c++;if(c<=2)o.push(l);}}comp=o.join("\\n");strat="diff";}
-else if(content.split("\\n").slice(0,50).filter(l=>/\\b(ERROR|WARN|FAIL)\\b/i.test(l)).length>2){const ls=content.split("\\n"),k=ls.filter(l=>/ERROR|WARN|FAIL|Trace|===/i.test(l)).slice(0,50);if(k.length<ls.length){k.push("["+(ls.length-k.length)+" omitted]");comp=k.join("\\n");strat="log";}}
-else if(content.split("\\n").slice(0,50).filter(l=>/^\\s*(def|class|func|fn|import|const|let)\\s/.test(l)).length>3){comp=content.split("\\n").filter(l=>{const x=l.trim();return x&&!x.startsWith("#")&&!x.startsWith("//");}).join("\\n");strat="code";}
-else if(content.split("\\n").filter(l=>/^[^\\s:]+:\\d+:/.test(l)).length>content.split("\\n").length*0.3){const ls=content.split("\\n"),g=new Map();for(const l of ls){const m=l.match(/^([^:]+):/);if(m){if(!g.has(m[1]))g.set(m[1],[]);g.get(m[1]).push(l);}}const o=[];for(const[,v]of g){o.push(...v.slice(0,5));if(v.length>5)o.push("  ...("+( v.length-5)+" more)");}comp=o.join("\\n");strat="search";}
-if(comp.length>16000&&strat==="passthrough"){comp=content.slice(0,7000)+"\\n[trunc]\\n"+content.slice(-7000);strat="truncate";}
-console.log(JSON.stringify({original:orig,compressed:comp.length,strategy:strat,modified:comp!==content}));
-`], { timeout: 10000, stdio: ["pipe","pipe","pipe"] });
+    const out = execFileSync("node", [TMP_SCRIPT, TMP_INPUT], { timeout: 10000, stdio: ["pipe","pipe","pipe"] });
     return JSON.parse(out.toString());
   } catch(e) { return {error: e.message?.slice(0,100)}; }
 }
@@ -89,7 +139,7 @@ const rows = [];
 for (const s of samples) {
   process.stdout.write(`  ${s.name}...`);
   const h = headroomCompress(s.content, s.type);
-  const o = oursCompress(s.content, s.type);
+  const o = oursCompress(s.content);
   rows.push({name:s.name, h, o});
   console.log(" done");
 }
@@ -111,8 +161,7 @@ if (valid.length) {
   const aO = valid.reduce((s,r)=>s+(1-r.o.compressed/r.o.original),0)/valid.length*100;
   console.log(`\n  Average: Headroom ${aH.toFixed(1)}% | Ours ${aO.toFixed(1)}% | Gap ${(aO-aH).toFixed(1)}%`);
 }
-
 console.log("\n  Strategies:");
 for (const r of rows) console.log(`    ${r.name}: H=${r.h.strategy||"?"} O=${r.o.strategy||"?"}`);
 
-try { unlinkSync(TMP); } catch{}
+try { unlinkSync(TMP_INPUT); unlinkSync(TMP_SCRIPT); } catch{}
