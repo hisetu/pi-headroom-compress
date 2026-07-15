@@ -1,0 +1,28 @@
+pi-headroom-compress
+Copyright 2025 hisetu
+
+This software is a derivative work inspired by Headroom
+(https://github.com/headroomlabs-ai/headroom).
+
+Headroom
+--------
+Copyright 2025 Headroom Contributors
+Licensed under the Apache License, Version 2.0
+https://github.com/headroomlabs-ai/headroom
+
+The following compression algorithms in this project are independent
+TypeScript reimplementations inspired by their Python counterparts
+in the Headroom project:
+
+  - SmartCrusher (headroom/transforms/smart_crusher.py)
+  - CodeCompressor (headroom/transforms/code_compressor.py)
+  - LogCompressor (headroom/transforms/log_compressor.py)
+  - DiffCompressor (headroom/transforms/diff_compressor.py)
+  - SearchCompressor (headroom/transforms/search_compressor.py)
+  - ContentDetector (headroom/transforms/content_detector.py)
+  - CacheAligner (headroom/transforms/cache_aligner.py)
+  - CCR Store (headroom/cache/compression_store.py)
+  - TOIN (headroom/telemetry/toin.py)
+  - Output Shaper (headroom/proxy/output_shaper.py)
+  - Read Lifecycle (headroom/transforms/read_lifecycle.py)
+  - Kompress ML integration (headroom/transforms/kompress_compressor.py)

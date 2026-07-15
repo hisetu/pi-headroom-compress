@@ -144,6 +144,12 @@ The benchmark imports the extension's real TypeScript `compressContent()` functi
 
 These synthetic checks measure compression and basic information retention, not model-answer correctness. Use real task A/B evaluation before making a general quality claim.
 
+## Attribution
+
+This project is a derivative work of [Headroom](https://github.com/headroomlabs-ai/headroom) (Copyright 2025 Headroom Contributors, Apache License 2.0). The compression algorithms are independent TypeScript reimplementations inspired by Headroom's Python originals. See [NOTICE](./NOTICE) for details.
+
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
+
+The original Headroom project is licensed under Apache 2.0 — see [LICENSE-APACHE-2.0](./LICENSE-APACHE-2.0).
