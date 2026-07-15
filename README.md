@@ -60,21 +60,49 @@ npm install
 
 ## Architecture
 
+### High-Level Flow
+
 ```
-Pi (any provider, any model)
+payload.input[]  (from before_provider_request hook)
   │
-  ├── before_provider_request hook
-  │     ├── ContentDetector → route to compressor
-  │     ├── SmartCrusher (JSON arrays)
-  │     ├── CodeCompressor (AST-based, tree-sitter)
-  │     ├── LogCompressor (error prioritization)
-  │     ├── DiffCompressor (keep changes)
-  │     ├── SearchCompressor (group by file)
-  │     └── CCR Store (save originals for retrieval)
-  │
-  ▼
+  ├─ developer item       → ANSI strip + line dedup (usually untouched)
+  ├─ function_call_output → detectContentType() → compressContent()
+  ├─ assistant items      → trim to last N chars
+  └─ user items           → pass through
+          │
+          ▼
   LLM Provider (Pi handles auth/routing/WebSocket directly)
 ```
+
+### Content Detection → Strategy Selection
+
+Each tool output block is first classified by `detectContentType()`, which samples the first 200 lines and applies detectors in priority order. The first detector that exceeds its confidence threshold wins:
+
+| Priority | Detection Rule | Type | Compressor | What it does |
+|----------|---------------|------|------------|-------------|
+| 1 | Starts with `[`, valid JSON array | `json_array` | **SmartCrusher** | BM25-scored top-N + tail items, dedup, lossless tabular compaction |
+| 2 | `diff --git` headers + `+/-` lines ≥ 0.7 confidence | `diff` | **DiffCompressor** | Keep hunk headers + changed lines + 2 context lines; cap hunks per file |
+| 3 | `file:line:` pattern in > 30% of lines | `search` | **SearchCompressor** | Group by file, keep first 3 hits per file, summarize remainder |
+| 4 | `ERROR/WARN/INFO/DEBUG` keywords in > 50% of lines | `build` | **LogCompressor** | Prioritize errors + stack traces + summary; skip repetitive INFO lines |
+| 5 | `def/class/func/import/const` keywords in > 50% of sample | `source_code` | **CodeCompressor** | AST via tree-sitter (body budget allocation); regex fallback if AST fails |
+| 6 | None of the above | `text` | **Kompress ML** → mid-truncate → passthrough | ML compression if available and text is large enough; else truncate center |
+
+### Additional Processing Layers
+
+These layers run before or around the content router:
+
+| Layer | When | Purpose |
+|-------|------|--------|
+| **ANSI strip** | Pre-detection | Remove terminal escape codes |
+| **Line dedup** | Pre-detection | Collapse N identical consecutive lines → `... (N lines omitted)` |
+| **Read Lifecycle** | Pre-detection | Same file read twice within TTL → replace with CCR hash reference |
+| **Output Shaper** | Post-compression | Inject system prompt pressure for concise model output |
+| **TOIN** | Post-compression | Observe which strategy was used and how much was saved (learning only) |
+| **CCR Store** | Post-compression | Cache original content by hash for on-demand retrieval (`/headroom-retrieve`) |
+
+### Decision Summary
+
+> **One sentence**: look at the content shape (JSON / diff / log / code / search / text), dispatch to the specialized compressor, keep only structurally important information for LLM decision-making, discard repetition and noise.
 
 ## Supported Languages (CodeCompressor)
 
