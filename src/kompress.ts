@@ -60,10 +60,10 @@ from headroom.transforms.kompress_compressor import KompressCompressor
 config_str = sys.stdin.read()
 config = json.loads(config_str)
 text = config["text"]
-target_rate = config.get("target_rate", 0.3)
+target_ratio = config.get("target_ratio", config.get("target_rate", 0.3))
 
 compressor = KompressCompressor()
-result = compressor.compress(text, target_rate=target_rate)
+result = compressor.compress(text, target_ratio=target_ratio)
 output = {
     "compressed": result.compressed,
     "original_tokens": result.original_tokens,
@@ -105,7 +105,7 @@ export function kompressText(text: string, config = DEFAULT_KOMPRESS_CONFIG): Ko
   if (!isKompressAvailable(config)) return noOp;
 
   try {
-    const input = JSON.stringify({ text, target_rate: config.targetRate });
+    const input = JSON.stringify({ text, target_ratio: config.targetRate });
     const output = execFileSync(config.pythonPath, ["-c", COMPRESS_SCRIPT], {
       input,
       timeout: 30000, // 30s timeout for model inference
