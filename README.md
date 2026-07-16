@@ -55,6 +55,8 @@ npm install
 | `/headroom-compress-toggle` | Enable/disable compression |
 | `/headroom-compress-config output 20000` | Set max tool output chars before truncation |
 | `/headroom-compress-config assistant 8000` | Set max assistant message chars |
+| `/headroom-compress-config kompress on` | Enable Kompress ML (adds ~5s per text block) |
+| `/headroom-compress-config kompress off` | Disable Kompress ML (default) |
 | `/headroom-ccr-status` | Show CCR store stats |
 | `/headroom-retrieve <hash>` | Retrieve original content by CCR hash |
 
@@ -127,6 +129,7 @@ Default settings (adjustable via `/headroom-compress-config`):
 | SmartCrusher max items | 15 | Keep top-N items from JSON arrays |
 | Code target rate | 0.2 | Keep ~20% of function bodies |
 | CCR TTL | 30 minutes | How long originals are cached |
+| Kompress ML | off | ML text compression (~69% savings, ~5s latency) |
 
 ## Benchmark
 

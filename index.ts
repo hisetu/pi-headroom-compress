@@ -16,6 +16,7 @@ import { kompressText, isKompressAvailable, DEFAULT_KOMPRESS_CONFIG } from "./sr
 // Global instances
 const ccrStore = new CCRStore();
 const toin = new TOIN();
+const kompressConfig = { ...DEFAULT_KOMPRESS_CONFIG };
 
 // ─── Content Type Detection (port of content_detector.py) ────────────
 
@@ -593,8 +594,8 @@ export function compressContent(content: string, query = ""): { compressed: stri
       return { compressed: searchResult, wasModified: searchResult !== content, strategy: "search_compressor" };
     default: {
       // Plain text: try Kompress ML first
-      if (content.length >= DEFAULT_KOMPRESS_CONFIG.minCharsToCompress) {
-        const kr = kompressText(content);
+      if (kompressConfig.enabled && content.length >= kompressConfig.minCharsToCompress) {
+        const kr = kompressText(content, kompressConfig);
         if (kr.wasModified) {
           return { compressed: kr.compressed, wasModified: true, strategy: "kompress_ml" };
         }
@@ -839,18 +840,28 @@ const factory: ExtensionFactory = (pi) => {
   });
 
   pi.registerCommand("headroom-compress-config", {
-    description: "Set max chars: /headroom-compress-config [output|assistant] <number>",
+    description: "Configure compression: /headroom-compress-config [output|assistant|kompress] <number|on|off>",
     handler: async (args: string, ctx: any) => {
       const parts = args.trim().split(/\s+/);
+      if (parts.length < 1 || !parts[0]) {
+        ctx.ui.notify(`output=${stats.maxOutputChars}, assistant=${stats.maxAssistantChars}, kompress=${kompressConfig.enabled ? "on" : "off"}`, "info");
+        return;
+      }
+      if (parts[0] === "kompress") {
+        if (parts[1] === "on") { kompressConfig.enabled = true; ctx.ui.notify("Kompress ML enabled (adds ~5s per text block)", "info"); }
+        else if (parts[1] === "off") { kompressConfig.enabled = false; ctx.ui.notify("Kompress ML disabled", "info"); }
+        else { ctx.ui.notify(`kompress=${kompressConfig.enabled ? "on" : "off"} (use: on/off)`, "info"); }
+        return;
+      }
       if (parts.length < 2) {
-        ctx.ui.notify(`output=${stats.maxOutputChars}, assistant=${stats.maxAssistantChars}`, "info");
+        ctx.ui.notify(`output=${stats.maxOutputChars}, assistant=${stats.maxAssistantChars}, kompress=${kompressConfig.enabled ? "on" : "off"}`, "info");
         return;
       }
       const value = parseInt(parts[1], 10);
       if (isNaN(value) || value < 1000) { ctx.ui.notify("Value must be >= 1000", "error"); return; }
       if (parts[0] === "output") stats.maxOutputChars = value;
       else if (parts[0] === "assistant") stats.maxAssistantChars = value;
-      else { ctx.ui.notify("Use: output or assistant", "error"); return; }
+      else { ctx.ui.notify("Use: output, assistant, or kompress", "error"); return; }
       ctx.ui.notify(`${parts[0]} max = ${value.toLocaleString()}`, "info");
     },
   });
