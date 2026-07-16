@@ -19,6 +19,7 @@
   },
   "scripts": {
     "benchmark": "node benchmark/compare.mjs",
+    "parity": "node benchmark/parity.mjs",
     "test": "node --experimental-strip-types test/toin.mjs && node --experimental-strip-types test/ccr-store.mjs && node --experimental-strip-types test/pricing.mjs"
   },
   "dependencies": {

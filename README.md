@@ -176,6 +176,22 @@ The benchmark imports the extension's real TypeScript `compressContent()` functi
 
 These synthetic checks measure compression and basic information retention, not model-answer correctness. Use real task A/B evaluation before making a general quality claim.
 
+### Golden parity report
+
+Run stable fixtures through both the installed Python Headroom implementation and this extension's real TypeScript implementation:
+
+```bash
+npm run parity
+```
+
+The report compares content detection, normalized strategy families, compression savings, byte-identical output, and critical-marker retention. Known differences are reported rather than hidden; runner failures return a non-zero exit status. Optionally save the complete machine-readable report:
+
+```bash
+node benchmark/parity.mjs --json parity-report.json
+```
+
+The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
+
 ## Attribution
 
 This project is a derivative work of [Headroom](https://github.com/headroomlabs-ai/headroom) (Copyright 2025 Headroom Contributors, Apache License 2.0). The compression algorithms are independent TypeScript reimplementations inspired by Headroom's Python originals. See [NOTICE](./NOTICE) for details.

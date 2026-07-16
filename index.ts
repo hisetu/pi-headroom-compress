@@ -21,15 +21,15 @@ const kompressConfig = { ...DEFAULT_KOMPRESS_CONFIG };
 
 // ─── Content Type Detection (inspired by content_detector.py) ───────
 
-type ContentType = "json_array" | "source_code" | "search" | "build" | "diff" | "html" | "tabular" | "text";
+export type ContentType = "json_array" | "source_code" | "search" | "build" | "diff" | "html" | "tabular" | "text";
 
-interface DetectionResult {
+export interface DetectionResult {
   type: ContentType;
   confidence: number;
   metadata: Record<string, unknown>;
 }
 
-function detectContentType(content: string): DetectionResult {
+export function detectContentType(content: string): DetectionResult {
   if (!content?.trim()) return { type: "text", confidence: 0, metadata: {} };
 
   const trimmed = content.trim();
