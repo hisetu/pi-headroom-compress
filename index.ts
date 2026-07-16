@@ -680,15 +680,65 @@ function setItemText(item: InputItem, text: string): InputItem {
 
 const STATUS_SLOT = "headroom-compress";
 
+// ─── Global savings persistence (SQLite) ─────────────────────────────
+
+let globalSavedChars = 0;
+
+function loadGlobalSaved(): number {
+  try {
+    const { DatabaseSync } = require("node:sqlite");
+    const { existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { homedir } = require("node:os");
+    const dbPath = join(homedir(), ".headroom", "pi-ccr-store.db");
+    if (!existsSync(dbPath)) return 0;
+    const db = new DatabaseSync(dbPath);
+    db.exec("CREATE TABLE IF NOT EXISTS global_stats (key TEXT PRIMARY KEY, value REAL)");
+    const row = db.prepare("SELECT value FROM global_stats WHERE key = ?").get("saved_chars") as any;
+    db.close();
+    return row?.value ?? 0;
+  } catch { return 0; }
+}
+
+function saveGlobalSaved(chars: number): void {
+  try {
+    const { DatabaseSync } = require("node:sqlite");
+    const { join } = require("node:path");
+    const { homedir } = require("node:os");
+    const { mkdirSync, existsSync } = require("node:fs");
+    const dir = join(homedir(), ".headroom");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const db = new DatabaseSync(join(dir, "pi-ccr-store.db"));
+    db.exec("CREATE TABLE IF NOT EXISTS global_stats (key TEXT PRIMARY KEY, value REAL)");
+    db.prepare("INSERT OR REPLACE INTO global_stats (key, value) VALUES (?, ?)").run("saved_chars", chars);
+    db.close();
+  } catch {}
+}
+
+// Cost estimation: ~4 chars/token, $3/1M input tokens (mid-range model)
+const CHARS_PER_TOKEN = 4;
+const COST_PER_TOKEN = 3 / 1_000_000; // $3/1M tokens
+
+function charsToDollars(chars: number): string {
+  const dollars = (chars / CHARS_PER_TOKEN) * COST_PER_TOKEN;
+  if (dollars < 0.01) return `$${(dollars * 100).toFixed(1)}¢`;
+  if (dollars < 1) return `$${dollars.toFixed(2)}`;
+  return `$${dollars.toFixed(1)}`;
+}
+
 function formatFooterStatus(stats: Stats): string {
   if (!stats.enabled) return "compress: off";
   if (stats.requestCount === 0) return "compress: ready";
-  const saved = stats.totalOriginalChars - stats.totalCompressedChars;
-  const pct = stats.totalOriginalChars > 0 ? ((saved / stats.totalOriginalChars) * 100).toFixed(0) : "0";
-  return `compress: -${pct}% (${(saved / 1000).toFixed(0)}k saved)`;
+  const sessionSaved = stats.totalOriginalChars - stats.totalCompressedChars;
+  const pct = stats.totalOriginalChars > 0 ? ((sessionSaved / stats.totalOriginalChars) * 100).toFixed(0) : "0";
+  return `compress: -${pct}% (${charsToDollars(sessionSaved)}/${charsToDollars(globalSavedChars)} saved)`;
 }
 
 const factory: ExtensionFactory = (pi) => {
+  // Load global cumulative savings from SQLite
+  globalSavedChars = loadGlobalSaved();
+  const loadedGlobalBase = globalSavedChars;
+
   const stats: Stats = {
     enabled: true,
     maxOutputChars: 32_000,
@@ -797,6 +847,10 @@ const factory: ExtensionFactory = (pi) => {
 
     stats.totalOriginalChars += totalOriginal + lifecycle.charsSaved;
     stats.totalCompressedChars += totalCompressed;
+
+    // Update global saved counter
+    const sessionSavedNow = stats.totalOriginalChars - stats.totalCompressedChars;
+    globalSavedChars = loadedGlobalBase + sessionSavedNow;
 
     // Update footer status
     try { ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats)); } catch {}
@@ -952,9 +1006,10 @@ const factory: ExtensionFactory = (pi) => {
     },
   });
 
-  // Save TOIN on session shutdown
+  // Save TOIN + global savings on session shutdown
   pi.on("session_shutdown" as any, async () => {
     toin.save();
+    saveGlobalSaved(globalSavedChars);
     return undefined;
   });
 };
