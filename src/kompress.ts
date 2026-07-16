@@ -41,8 +41,8 @@ function findPython(): string {
 }
 
 export const DEFAULT_KOMPRESS_CONFIG: KompressConfig = {
-  enabled: true,
-  minCharsToCompress: 2000,
+  enabled: false, // disabled by default — adds ~5s latency per block
+  minCharsToCompress: 8000,
   targetRate: 0.3,
   pythonPath: findPython(),
 };
