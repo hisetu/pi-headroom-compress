@@ -20,6 +20,24 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_ENTRIES = 500;
 const PURGE_INTERVAL_MS = 60_000; // purge expired rows at most once per minute
 
+export interface SavingsEvent {
+  timestamp: number;
+  model: string;
+  provider: string;
+  tokensBefore: number;
+  tokensAfter: number;
+  tokensSaved: number;
+  costUsd: number;
+  inputCostPer1M: number;
+  pricingSource: string;
+}
+
+export interface GlobalSavings {
+  tokensSaved: number;
+  costUsd: number;
+  eventCount: number;
+}
+
 export interface CCREntry {
   hash: string;
   original: string;
@@ -123,23 +141,42 @@ export class CCRStore {
     return row?.cnt ?? 0;
   }
 
-  /** Read the all-time number of characters saved by Pi compression. */
-  getGlobalSavedChars(): number {
+  /** Append one priced compression event. Cost is fixed at write time. */
+  recordSavingsEvent(event: SavingsEvent): void {
+    if (event.tokensSaved <= 0 || event.costUsd < 0) return;
     this.ensureDb();
-    const row = this.db!.prepare(
-      "SELECT value FROM global_stats WHERE key = ?"
-    ).get("saved_chars") as any;
-    const value = Number(row?.value);
-    return Number.isFinite(value) && value > 0 ? value : 0;
+    this.db!.prepare(`
+      INSERT INTO savings_events (
+        timestamp, model, provider, tokens_before, tokens_after,
+        tokens_saved, cost_usd, input_cost_per_1m, pricing_source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.timestamp,
+      event.model,
+      event.provider,
+      event.tokensBefore,
+      event.tokensAfter,
+      event.tokensSaved,
+      event.costUsd,
+      event.inputCostPer1M,
+      event.pricingSource,
+    );
   }
 
-  /** Persist the all-time number of characters saved by Pi compression. */
-  setGlobalSavedChars(chars: number): void {
+  /** Aggregate append-only savings events across every Pi session. */
+  getGlobalSavings(): GlobalSavings {
     this.ensureDb();
-    const value = Number.isFinite(chars) && chars > 0 ? chars : 0;
-    this.db!.prepare(
-      "INSERT OR REPLACE INTO global_stats (key, value) VALUES (?, ?)"
-    ).run("saved_chars", value);
+    const row = this.db!.prepare(`
+      SELECT COUNT(*) AS event_count,
+             COALESCE(SUM(tokens_saved), 0) AS tokens_saved,
+             COALESCE(SUM(cost_usd), 0) AS cost_usd
+      FROM savings_events
+    `).get() as any;
+    return {
+      tokensSaved: Number(row?.tokens_saved) || 0,
+      costUsd: Number(row?.cost_usd) || 0,
+      eventCount: Number(row?.event_count) || 0,
+    };
   }
 
   /** Get stats. */
@@ -190,6 +227,22 @@ export class CCRStore {
           value REAL NOT NULL
         )
       `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS savings_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp REAL NOT NULL,
+          model TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          tokens_before INTEGER NOT NULL,
+          tokens_after INTEGER NOT NULL,
+          tokens_saved INTEGER NOT NULL,
+          cost_usd REAL NOT NULL,
+          input_cost_per_1m REAL NOT NULL,
+          pricing_source TEXT NOT NULL
+        )
+      `);
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_savings_timestamp ON savings_events (timestamp)");
+      this.migrateLegacySavings();
     } catch (err) {
       // Fallback: db stays null, store/retrieve become no-ops
       this.db = null;
@@ -198,6 +251,33 @@ export class CCRStore {
 
   private ensureDb(): void {
     if (!this.db) this.open();
+  }
+
+  /** Convert the previous fixed-rate saved_chars counter exactly once. */
+  private migrateLegacySavings(): void {
+    try {
+      const migrated = this.db!.prepare(
+        "SELECT value FROM global_stats WHERE key = ?"
+      ).get("savings_ledger_migrated") as any;
+      if (Number(migrated?.value) === 1) return;
+
+      const legacy = this.db!.prepare(
+        "SELECT value FROM global_stats WHERE key = ?"
+      ).get("saved_chars") as any;
+      const chars = Number(legacy?.value);
+      if (Number.isFinite(chars) && chars > 0) {
+        const tokens = Math.ceil(chars / 4);
+        this.db!.prepare(`
+          INSERT INTO savings_events (
+            timestamp, model, provider, tokens_before, tokens_after,
+            tokens_saved, cost_usd, input_cost_per_1m, pricing_source
+          ) VALUES (?, 'unknown', 'unknown', ?, 0, ?, ?, 3, 'legacy-fallback')
+        `).run(Date.now(), tokens, tokens, tokens * 3 / 1_000_000);
+      }
+      this.db!.prepare(
+        "INSERT OR REPLACE INTO global_stats (key, value) VALUES (?, 1)"
+      ).run("savings_ledger_migrated");
+    } catch {}
   }
 
   private maybePurge(): void {

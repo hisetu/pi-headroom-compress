@@ -71,7 +71,17 @@ compress: -35% ($10.0/$1000.0 saved)
                   └─ savings in the current Pi session
 ```
 
-The percentage is the current session's character reduction. Dollar values are estimates based on approximately 4 characters per token and `$3 / 1M` input tokens; they are not provider billing data. The all-time counter is updated after each request and persisted in `~/.headroom/pi-ccr-store.db`.
+The percentage is the current session's character reduction. Dollar savings follow Headroom's model-aware accounting approach:
+
+1. estimate the request's tokens before and after compression using Pi's `ceil(chars / 4)` context estimator;
+2. read the active model's input price from Pi's model registry;
+3. apply the highest matching long-context pricing tier, when configured;
+4. fall back to `$3 / 1M` input tokens only when model pricing is unavailable;
+5. store the model, provider, tokens, selected rate, pricing source, and USD value at event time so historical totals do not change when pricing changes later.
+
+The extension cannot apply provider cache-read/cache-write discounts because `before_provider_request` does not expose the eventual cache usage breakdown. Values are therefore model-aware list-price estimates, not provider billing data.
+
+Each compression is appended to the `savings_events` ledger in `~/.headroom/pi-ccr-store.db`. The all-time footer value is the sum of that ledger across sessions and processes.
 
 Before any provider request, the footer displays `compress: ready`; while disabled, it displays `compress: off`.
 

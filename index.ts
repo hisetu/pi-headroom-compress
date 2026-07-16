@@ -7,6 +7,7 @@ import { applyReadLifecycle, DEFAULT_READ_LIFECYCLE_CONFIG } from "./src/read-li
 import { shapeOutput, DEFAULT_OUTPUT_SHAPER_CONFIG } from "./src/output-shaper.ts";
 import { TOIN, DEFAULT_TOIN_CONFIG, computeSignature } from "./src/toin.ts";
 import { kompressText, isKompressAvailable, DEFAULT_KOMPRESS_CONFIG } from "./src/kompress.ts";
+import { estimateCompressionSavings } from "./src/pricing.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
 // HEADROOM-COMPRESS: Pure TypeScript context compression extension
@@ -654,6 +655,8 @@ interface Stats {
   compressedCount: number;
   totalOriginalChars: number;
   totalCompressedChars: number;
+  totalSavedTokens: number;
+  totalSavedUsd: number;
   strategyCounts: Record<string, number>;
 }
 
@@ -680,16 +683,11 @@ function setItemText(item: InputItem, text: string): InputItem {
 
 const STATUS_SLOT = "headroom-compress";
 
-// All-time savings are persisted by CCRStore in pi-ccr-store.db.
-let globalSavedChars = 0;
+// All-time savings are aggregated from an append-only SQLite ledger.
+let globalSavedUsd = 0;
 
-// Cost estimation: ~4 chars/token, $3/1M input tokens (mid-range model)
-const CHARS_PER_TOKEN = 4;
-const COST_PER_TOKEN = 3 / 1_000_000; // $3/1M tokens
-
-function charsToDollars(chars: number): string {
-  const dollars = (chars / CHARS_PER_TOKEN) * COST_PER_TOKEN;
-  if (dollars < 0.01) return `$${(dollars * 100).toFixed(1)}¢`;
+function formatDollars(dollars: number): string {
+  if (dollars < 0.01) return `$${dollars.toFixed(4)}`;
   if (dollars < 1) return `$${dollars.toFixed(2)}`;
   return `$${dollars.toFixed(1)}`;
 }
@@ -699,13 +697,11 @@ function formatFooterStatus(stats: Stats): string {
   if (stats.requestCount === 0) return "compress: ready";
   const sessionSaved = stats.totalOriginalChars - stats.totalCompressedChars;
   const pct = stats.totalOriginalChars > 0 ? ((sessionSaved / stats.totalOriginalChars) * 100).toFixed(0) : "0";
-  return `compress: -${pct}% (${charsToDollars(sessionSaved)}/${charsToDollars(globalSavedChars)} saved)`;
+  return `compress: -${pct}% (${formatDollars(stats.totalSavedUsd)}/${formatDollars(globalSavedUsd)} saved)`;
 }
 
 const factory: ExtensionFactory = (pi) => {
-  // Load global cumulative savings from SQLite
-  globalSavedChars = ccrStore.getGlobalSavedChars();
-  const loadedGlobalBase = globalSavedChars;
+  globalSavedUsd = ccrStore.getGlobalSavings().costUsd;
 
   const stats: Stats = {
     enabled: true,
@@ -715,6 +711,8 @@ const factory: ExtensionFactory = (pi) => {
     compressedCount: 0,
     totalOriginalChars: 0,
     totalCompressedChars: 0,
+    totalSavedTokens: 0,
+    totalSavedUsd: 0,
     strategyCounts: {},
   };
 
@@ -724,12 +722,10 @@ const factory: ExtensionFactory = (pi) => {
     return undefined;
   });
 
-  pi.on("before_provider_request", async (event, _ctx) => {
+  pi.on("before_provider_request", async (event, ctx) => {
     if (!stats.enabled) return undefined;
     const payload = event.payload as RequestPayload | undefined;
     if (!payload?.input || !Array.isArray(payload.input)) return undefined;
-
-    const ctx = _ctx as any;
 
     stats.requestCount++;
     let items = payload.input as InputItem[];
@@ -813,13 +809,25 @@ const factory: ExtensionFactory = (pi) => {
       return item;
     });
 
-    stats.totalOriginalChars += totalOriginal + lifecycle.charsSaved;
+    const requestOriginalChars = totalOriginal + lifecycle.charsSaved;
+    stats.totalOriginalChars += requestOriginalChars;
     stats.totalCompressedChars += totalCompressed;
 
-    // Update global saved counter
-    const sessionSavedNow = stats.totalOriginalChars - stats.totalCompressedChars;
-    globalSavedChars = loadedGlobalBase + sessionSavedNow;
-    ccrStore.setGlobalSavedChars(globalSavedChars);
+    const savings = estimateCompressionSavings(requestOriginalChars, totalCompressed, ctx.model);
+    stats.totalSavedTokens += savings.tokensSaved;
+    stats.totalSavedUsd += savings.costUsd;
+    ccrStore.recordSavingsEvent({
+      timestamp: Date.now(),
+      model: savings.model,
+      provider: savings.provider,
+      tokensBefore: savings.tokensBefore,
+      tokensAfter: savings.tokensAfter,
+      tokensSaved: savings.tokensSaved,
+      costUsd: savings.costUsd,
+      inputCostPer1M: savings.inputCostPer1M,
+      pricingSource: savings.pricingSource,
+    });
+    globalSavedUsd = ccrStore.getGlobalSavings().costUsd;
 
     // Update footer status
     try { ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats)); } catch {}
@@ -839,12 +847,15 @@ const factory: ExtensionFactory = (pi) => {
       const saved = stats.totalOriginalChars - stats.totalCompressedChars;
       const pct = stats.totalOriginalChars > 0 ? ((saved / stats.totalOriginalChars) * 100).toFixed(1) : "0";
       const strategies = Object.entries(stats.strategyCounts).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+      const global = ccrStore.getGlobalSavings();
       ctx.ui.notify(
         [
           `headroom-compress: ${stats.enabled ? "✅ enabled" : "❌ disabled"}`,
           `Requests: ${stats.requestCount} (${stats.compressedCount} compressed)`,
           `Total: ${stats.totalOriginalChars.toLocaleString()} → ${stats.totalCompressedChars.toLocaleString()} chars`,
           `Saved: ${saved.toLocaleString()} chars (${pct}%)`,
+          `Estimated tokens saved: ${stats.totalSavedTokens.toLocaleString()} session / ${global.tokensSaved.toLocaleString()} all-time`,
+          `Estimated cost saved: ${formatDollars(stats.totalSavedUsd)} session / ${formatDollars(global.costUsd)} all-time`,
           `Max output: ${stats.maxOutputChars.toLocaleString()} | Max assistant: ${stats.maxAssistantChars.toLocaleString()}`,
           strategies ? `Strategies:\n${strategies}` : "",
         ].filter(Boolean).join("\n"),
@@ -975,10 +986,9 @@ const factory: ExtensionFactory = (pi) => {
     },
   });
 
-  // Save learned state on session shutdown.
+  // Save learned state on session shutdown. Savings events persist per request.
   pi.on("session_shutdown" as any, async () => {
     toin.save();
-    ccrStore.setGlobalSavedChars(globalSavedChars);
     return undefined;
   });
 };

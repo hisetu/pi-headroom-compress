@@ -11,14 +11,25 @@ const databasePath = join(directory, "ccr.db");
 try {
   const first = new CCRStore(30_000, databasePath);
   const hash = first.store("original content", "compressed", "test", "test_strategy");
-  first.setGlobalSavedChars(12_345);
+  first.recordSavingsEvent({
+    timestamp: 1,
+    model: "gpt-test",
+    provider: "test",
+    tokensBefore: 1000,
+    tokensAfter: 600,
+    tokensSaved: 400,
+    costUsd: 0.002,
+    inputCostPer1M: 5,
+    pricingSource: "model",
+  });
 
   const second = new CCRStore(30_000, databasePath);
   assert.equal(second.retrieve(hash)?.original, "original content");
-  assert.equal(second.getGlobalSavedChars(), 12_345);
-
-  second.setGlobalSavedChars(Number.NaN);
-  assert.equal(second.getGlobalSavedChars(), 0);
+  assert.deepEqual(second.getGlobalSavings(), {
+    tokensSaved: 400,
+    costUsd: 0.002,
+    eventCount: 1,
+  });
 
   console.log("CCR persistence and global savings test passed");
 } finally {

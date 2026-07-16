@@ -19,7 +19,7 @@
   },
   "scripts": {
     "benchmark": "node benchmark/compare.mjs",
-    "test": "node --experimental-strip-types test/toin.mjs && node --experimental-strip-types test/ccr-store.mjs"
+    "test": "node --experimental-strip-types test/toin.mjs && node --experimental-strip-types test/ccr-store.mjs && node --experimental-strip-types test/pricing.mjs"
   },
   "dependencies": {
     "tree-sitter": "^0.25.0",
