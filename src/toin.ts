@@ -10,7 +10,8 @@
  * Privacy: no actual data values stored. Tool names are structure hashes.
  * Field names are SHA256[:8] hashes.
  * 
- * Mirrors: headroom/telemetry/toin.py
+ * Lightweight observation layer inspired by headroom/telemetry/toin.py;
+ * it does not implement the full Headroom learning and feedback system.
  */
 
 import { createHash } from "node:crypto";

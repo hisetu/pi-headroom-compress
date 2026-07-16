@@ -1,7 +1,8 @@
 /**
  * AST-based Code Compressor using tree-sitter
  * 
- * 1:1 port of headroom/transforms/code_compressor.py
+ * Streamlined TypeScript implementation inspired by
+ * headroom/transforms/code_compressor.py; not a 1:1 or byte-compatible port.
  * 
  * Strategy:
  * 1. Parse code → AST via tree-sitter

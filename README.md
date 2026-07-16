@@ -1,6 +1,6 @@
 # pi-headroom-compress
 
-Pure TypeScript context compression extension for [Pi](https://github.com/earendil-works/pi-coding-agent). Implements Headroom-equivalent compression algorithms as a Pi extension — no proxy, no external service, no auth issues.
+A Pi-native context compression extension for [Pi](https://github.com/earendil-works/pi-coding-agent). It is an independent, streamlined TypeScript implementation inspired by Headroom's architecture—not a byte-compatible or 1:1 port. It runs without a proxy or external service; optional Kompress ML delegates to a locally installed Headroom Python package.
 
 ## Why
 
@@ -13,7 +13,11 @@ Running a remote Headroom proxy for GitHub Copilot's `gpt-5.4` is blocked by int
 
 ## Compression Rate
 
-~20% on real coding sessions (tested with Python/TypeScript tool outputs).
+Observed savings are ~20% on real coding sessions with Python/TypeScript tool outputs. Results vary by workload and more aggressive compression does not by itself prove equivalent answer quality.
+
+## Compatibility Scope
+
+This project ports selected ideas and behavior, not complete Headroom feature parity. Detectors, thresholds, supported formats, metadata, feedback systems, and exact compressed output may differ. The benchmark validates compression and selected marker retention; it does not establish byte parity or model-answer equivalence.
 
 ## Features
 

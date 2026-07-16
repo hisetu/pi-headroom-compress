@@ -4,7 +4,8 @@
  * Detects volatile/dynamic content in system prompts that prevents
  * provider KV cache hits. Reports warnings but does NOT modify content.
  * 
- * Mirrors: headroom/transforms/cache_aligner.py
+ * Lightweight regex-based detector inspired by
+ * headroom/transforms/cache_aligner.py; Headroom uses structural parsing.
  */
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;

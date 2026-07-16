@@ -4,10 +4,11 @@
  * When content is compressed, the original is stored here with a hash key.
  * The LLM can retrieve originals on demand via the headroom_retrieve tool.
  *
- * Storage: SQLite at ~/.headroom/ccr_store.db (same path as Python Headroom)
+ * Storage: SQLite at ~/.headroom/pi-ccr-store.db (separate from Python Headroom).
  * Survives process restarts and /reload.
  *
- * Mirrors: headroom/cache/compression_store.py + backends/sqlite.py
+ * Inspired by headroom/cache/compression_store.py + backends/sqlite.py;
+ * this is a smaller Pi-specific schema and feature set.
  */
 
 import { createHash } from "node:crypto";

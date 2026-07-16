@@ -1,7 +1,8 @@
 /**
  * SmartCrusher — JSON array compression with BM25 scoring + tabular compaction
  * 
- * Mirrors: headroom/transforms/smart_crusher.py (Rust-backed)
+ * Streamlined implementation inspired by headroom/transforms/smart_crusher.py;
+ * output and scoring are not byte-compatible with Headroom's Rust backend.
  * 
  * Strategy priority:
  * 1. Deduplication (identical items)

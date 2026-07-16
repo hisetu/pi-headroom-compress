@@ -11,7 +11,8 @@
  * - 12% superseded (file re-Read later)
  * - Only 20% are fresh
  * 
- * Mirrors: headroom/transforms/read_lifecycle.py
+ * Pi/OpenAI-Responses adaptation inspired by
+ * headroom/transforms/read_lifecycle.py; supported message shapes differ.
  */
 
 import { CCRStore } from "./ccr-store.ts";

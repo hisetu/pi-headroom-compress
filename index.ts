@@ -10,8 +10,8 @@ import { kompressText, isKompressAvailable, DEFAULT_KOMPRESS_CONFIG } from "./sr
 import { estimateCompressionSavings } from "./src/pricing.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
-// HEADROOM-COMPRESS: Pure TypeScript context compression extension
-// Implements Headroom-equivalent algorithms without external dependencies
+// HEADROOM-COMPRESS: Pi-native context compression extension
+// Streamlined independent implementations inspired by Headroom
 // ═══════════════════════════════════════════════════════════════════════
 
 // Global instances
@@ -19,7 +19,7 @@ const ccrStore = new CCRStore();
 const toin = new TOIN();
 const kompressConfig = { ...DEFAULT_KOMPRESS_CONFIG };
 
-// ─── Content Type Detection (port of content_detector.py) ────────────
+// ─── Content Type Detection (inspired by content_detector.py) ───────
 
 type ContentType = "json_array" | "source_code" | "search" | "build" | "diff" | "html" | "tabular" | "text";
 

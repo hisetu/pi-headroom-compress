@@ -12,7 +12,8 @@
  * - Steering text is byte-stable and idempotent
  * - Never modify user messages or tool results
  * 
- * Mirrors: headroom/proxy/output_shaper.py
+ * OpenAI Responses adaptation inspired by headroom/proxy/output_shaper.py;
+ * it is not protocol-equivalent to Headroom's proxy implementation.
  */
 
 // ─── Verbosity Levels ────────────────────────────────────────────────

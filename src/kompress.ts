@@ -6,7 +6,8 @@
  * 
  * Architecture: ModernBERT-base + dual heads (token keep/discard + span importance)
  * 
- * Mirrors: headroom/transforms/kompress_compressor.py
+ * Delegates compression to the installed Headroom Python
+ * KompressCompressor; this wrapper exposes a smaller configuration surface.
  */
 
 import { execFileSync } from "node:child_process";
