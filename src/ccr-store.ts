@@ -1,21 +1,30 @@
 /**
  * CCR (Compress-Cache-Retrieve) Store
- * 
+ *
  * When content is compressed, the original is stored here with a hash key.
  * The LLM can retrieve originals on demand via the headroom_retrieve tool.
- * 
- * Mirrors: headroom/cache/compression_store.py
+ *
+ * Storage: SQLite at ~/.headroom/ccr_store.db (same path as Python Headroom)
+ * Survives process restarts and /reload.
+ *
+ * Mirrors: headroom/cache/compression_store.py + backends/sqlite.py
  */
 
 import { createHash } from "node:crypto";
+import { existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const MAX_ENTRIES = 200;
+const MAX_ENTRIES = 500;
+const PURGE_INTERVAL_MS = 60_000; // purge expired rows at most once per minute
 
 export interface CCREntry {
   hash: string;
   original: string;
   compressed: string;
+  strategy?: string;
   toolName?: string;
   createdAt: number;
   ttlMs: number;
@@ -24,100 +33,167 @@ export interface CCREntry {
 }
 
 export class CCRStore {
-  private entries = new Map<string, CCREntry>();
+  private db: DatabaseSync | null = null;
   private ttlMs: number;
+  private dbPath: string;
+  private lastPurge = 0;
 
-  constructor(ttlMs = DEFAULT_TTL_MS) {
+  constructor(ttlMs = DEFAULT_TTL_MS, dbPath?: string) {
     this.ttlMs = ttlMs;
+    this.dbPath = dbPath ?? join(homedir(), ".headroom", "pi-ccr-store.db");
+    this.open();
   }
 
-  /** Compute a 12-char hex hash of content (same as Headroom's compute_short_hash). */
+  /** Compute a 12-char hex hash of content. */
   static hash(content: string): string {
     return createHash("sha256").update(content).digest("hex").slice(0, 12);
   }
 
   /** Store original content and return the hash key. */
-  store(original: string, compressed: string, toolName?: string): string {
+  store(original: string, compressed: string, toolName?: string, strategy?: string): string {
     const hash = CCRStore.hash(original);
+    const now = Date.now();
 
-    this.entries.set(hash, {
-      hash,
-      original,
-      compressed,
-      toolName,
-      createdAt: Date.now(),
-      ttlMs: this.ttlMs,
-      retrievalCount: 0,
-    });
+    this.ensureDb();
+    const stmt = this.db!.prepare(
+      `INSERT OR REPLACE INTO ccr_entries (hash, original, compressed, strategy, tool_name, created_at, ttl_ms, retrieval_count, last_accessed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)`
+    );
+    stmt.run(hash, original, compressed, strategy ?? null, toolName ?? null, now, this.ttlMs);
 
-    // Evict expired + overflow
-    this.evict();
-
+    this.maybePurge();
     return hash;
   }
 
   /** Retrieve original content by hash. Returns null if expired or not found. */
   retrieve(hash: string): CCREntry | null {
-    const entry = this.entries.get(hash);
-    if (!entry) return null;
-    if (Date.now() - entry.createdAt > entry.ttlMs) {
-      this.entries.delete(hash);
+    this.ensureDb();
+    const now = Date.now();
+    const stmt = this.db!.prepare(
+      "SELECT hash, original, compressed, strategy, tool_name, created_at, ttl_ms, retrieval_count, last_accessed FROM ccr_entries WHERE hash = ?"
+    );
+    const row = stmt.get(hash) as any;
+    if (!row) return null;
+
+    if (now - row.created_at > row.ttl_ms) {
+      this.db!.prepare("DELETE FROM ccr_entries WHERE hash = ?").run(hash);
       return null;
     }
-    entry.retrievalCount++;
-    entry.lastAccessed = Date.now();
-    return entry;
+
+    // Update access
+    this.db!.prepare(
+      "UPDATE ccr_entries SET retrieval_count = retrieval_count + 1, last_accessed = ? WHERE hash = ?"
+    ).run(now, hash);
+
+    return {
+      hash: row.hash,
+      original: row.original,
+      compressed: row.compressed,
+      strategy: row.strategy,
+      toolName: row.tool_name,
+      createdAt: row.created_at,
+      ttlMs: row.ttl_ms,
+      retrievalCount: row.retrieval_count + 1,
+      lastAccessed: now,
+    };
   }
 
   /** Check if a hash exists and is not expired. */
   has(hash: string): boolean {
-    const entry = this.entries.get(hash);
-    if (!entry) return false;
-    if (Date.now() - entry.createdAt > entry.ttlMs) {
-      this.entries.delete(hash);
+    this.ensureDb();
+    const now = Date.now();
+    const row = this.db!.prepare(
+      "SELECT created_at, ttl_ms FROM ccr_entries WHERE hash = ?"
+    ).get(hash) as any;
+    if (!row) return false;
+    if (now - row.created_at > row.ttl_ms) {
+      this.db!.prepare("DELETE FROM ccr_entries WHERE hash = ?").run(hash);
       return false;
     }
     return true;
   }
 
-  /** Get store size. */
+  /** Get store size (live entries only). */
   get size(): number {
-    return this.entries.size;
+    this.ensureDb();
+    const now = Date.now();
+    const row = this.db!.prepare(
+      "SELECT COUNT(*) as cnt FROM ccr_entries WHERE (? - created_at) <= ttl_ms"
+    ).get(now) as any;
+    return row?.cnt ?? 0;
   }
 
   /** Get stats. */
   stats(): { size: number; totalRetrievals: number; oldestAgeMs: number } {
-    let totalRetrievals = 0;
-    let oldestAge = 0;
+    this.ensureDb();
     const now = Date.now();
-    for (const entry of this.entries.values()) {
-      totalRetrievals += entry.retrievalCount;
-      oldestAge = Math.max(oldestAge, now - entry.createdAt);
-    }
-    return { size: this.entries.size, totalRetrievals, oldestAgeMs: oldestAge };
+    const row = this.db!.prepare(`
+      SELECT COUNT(*) as cnt,
+             COALESCE(SUM(retrieval_count), 0) as total_retrievals,
+             COALESCE(MAX(? - created_at), 0) as oldest_age
+      FROM ccr_entries
+      WHERE (? - created_at) <= ttl_ms
+    `).get(now, now) as any;
+    return {
+      size: row?.cnt ?? 0,
+      totalRetrievals: row?.total_retrievals ?? 0,
+      oldestAgeMs: row?.oldest_age ?? 0,
+    };
   }
 
-  /** Remove expired entries and trim to max size. */
-  private evict(): void {
+  // ── private ──────────────────────────────────────────────────────
+
+  private open(): void {
+    try {
+      const dir = dirname(this.dbPath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+      this.db = new DatabaseSync(this.dbPath);
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA busy_timeout = 3000");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS ccr_entries (
+          hash TEXT PRIMARY KEY,
+          original TEXT NOT NULL,
+          compressed TEXT NOT NULL,
+          strategy TEXT,
+          tool_name TEXT,
+          created_at REAL NOT NULL,
+          ttl_ms REAL NOT NULL,
+          retrieval_count INTEGER NOT NULL DEFAULT 0,
+          last_accessed REAL
+        )
+      `);
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_ccr_expiry ON ccr_entries (created_at)");
+    } catch (err) {
+      // Fallback: db stays null, store/retrieve become no-ops
+      this.db = null;
+    }
+  }
+
+  private ensureDb(): void {
+    if (!this.db) this.open();
+  }
+
+  private maybePurge(): void {
     const now = Date.now();
+    if (now - this.lastPurge < PURGE_INTERVAL_MS) return;
+    this.lastPurge = now;
 
-    // Remove expired
-    for (const [hash, entry] of this.entries) {
-      if (now - entry.createdAt > entry.ttlMs) {
-        this.entries.delete(hash);
-      }
-    }
+    try {
+      // Remove expired
+      this.db!.exec(`DELETE FROM ccr_entries WHERE (${now} - created_at) > ttl_ms`);
 
-    // If still over capacity, remove oldest entries
-    if (this.entries.size > MAX_ENTRIES) {
-      const sorted = [...this.entries.entries()].sort(
-        (a, b) => a[1].createdAt - b[1].createdAt
-      );
-      const toRemove = sorted.slice(0, this.entries.size - MAX_ENTRIES);
-      for (const [hash] of toRemove) {
-        this.entries.delete(hash);
+      // Trim to max entries (keep newest)
+      const count = (this.db!.prepare("SELECT COUNT(*) as cnt FROM ccr_entries").get() as any)?.cnt ?? 0;
+      if (count > MAX_ENTRIES) {
+        this.db!.exec(`
+          DELETE FROM ccr_entries WHERE hash IN (
+            SELECT hash FROM ccr_entries ORDER BY created_at ASC LIMIT ${count - MAX_ENTRIES}
+          )
+        `);
       }
-    }
+    } catch {}
   }
 }
 
