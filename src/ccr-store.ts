@@ -123,6 +123,25 @@ export class CCRStore {
     return row?.cnt ?? 0;
   }
 
+  /** Read the all-time number of characters saved by Pi compression. */
+  getGlobalSavedChars(): number {
+    this.ensureDb();
+    const row = this.db!.prepare(
+      "SELECT value FROM global_stats WHERE key = ?"
+    ).get("saved_chars") as any;
+    const value = Number(row?.value);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  /** Persist the all-time number of characters saved by Pi compression. */
+  setGlobalSavedChars(chars: number): void {
+    this.ensureDb();
+    const value = Number.isFinite(chars) && chars > 0 ? chars : 0;
+    this.db!.prepare(
+      "INSERT OR REPLACE INTO global_stats (key, value) VALUES (?, ?)"
+    ).run("saved_chars", value);
+  }
+
   /** Get stats. */
   stats(): { size: number; totalRetrievals: number; oldestAgeMs: number } {
     this.ensureDb();
@@ -165,6 +184,12 @@ export class CCRStore {
         )
       `);
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_ccr_expiry ON ccr_entries (created_at)");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS global_stats (
+          key TEXT PRIMARY KEY,
+          value REAL NOT NULL
+        )
+      `);
     } catch (err) {
       // Fallback: db stays null, store/retrieve become no-ops
       this.db = null;

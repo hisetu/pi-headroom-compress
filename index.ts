@@ -680,40 +680,8 @@ function setItemText(item: InputItem, text: string): InputItem {
 
 const STATUS_SLOT = "headroom-compress";
 
-// ─── Global savings persistence (SQLite) ─────────────────────────────
-
+// All-time savings are persisted by CCRStore in pi-ccr-store.db.
 let globalSavedChars = 0;
-
-function loadGlobalSaved(): number {
-  try {
-    const { DatabaseSync } = require("node:sqlite");
-    const { existsSync } = require("node:fs");
-    const { join } = require("node:path");
-    const { homedir } = require("node:os");
-    const dbPath = join(homedir(), ".headroom", "pi-ccr-store.db");
-    if (!existsSync(dbPath)) return 0;
-    const db = new DatabaseSync(dbPath);
-    db.exec("CREATE TABLE IF NOT EXISTS global_stats (key TEXT PRIMARY KEY, value REAL)");
-    const row = db.prepare("SELECT value FROM global_stats WHERE key = ?").get("saved_chars") as any;
-    db.close();
-    return row?.value ?? 0;
-  } catch { return 0; }
-}
-
-function saveGlobalSaved(chars: number): void {
-  try {
-    const { DatabaseSync } = require("node:sqlite");
-    const { join } = require("node:path");
-    const { homedir } = require("node:os");
-    const { mkdirSync, existsSync } = require("node:fs");
-    const dir = join(homedir(), ".headroom");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const db = new DatabaseSync(join(dir, "pi-ccr-store.db"));
-    db.exec("CREATE TABLE IF NOT EXISTS global_stats (key TEXT PRIMARY KEY, value REAL)");
-    db.prepare("INSERT OR REPLACE INTO global_stats (key, value) VALUES (?, ?)").run("saved_chars", chars);
-    db.close();
-  } catch {}
-}
 
 // Cost estimation: ~4 chars/token, $3/1M input tokens (mid-range model)
 const CHARS_PER_TOKEN = 4;
@@ -736,7 +704,7 @@ function formatFooterStatus(stats: Stats): string {
 
 const factory: ExtensionFactory = (pi) => {
   // Load global cumulative savings from SQLite
-  globalSavedChars = loadGlobalSaved();
+  globalSavedChars = ccrStore.getGlobalSavedChars();
   const loadedGlobalBase = globalSavedChars;
 
   const stats: Stats = {
@@ -851,6 +819,7 @@ const factory: ExtensionFactory = (pi) => {
     // Update global saved counter
     const sessionSavedNow = stats.totalOriginalChars - stats.totalCompressedChars;
     globalSavedChars = loadedGlobalBase + sessionSavedNow;
+    ccrStore.setGlobalSavedChars(globalSavedChars);
 
     // Update footer status
     try { ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats)); } catch {}
@@ -1006,10 +975,10 @@ const factory: ExtensionFactory = (pi) => {
     },
   });
 
-  // Save TOIN + global savings on session shutdown
+  // Save learned state on session shutdown.
   pi.on("session_shutdown" as any, async () => {
     toin.save();
-    saveGlobalSaved(globalSavedChars);
+    ccrStore.setGlobalSavedChars(globalSavedChars);
     return undefined;
   });
 };

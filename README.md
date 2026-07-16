@@ -25,7 +25,7 @@ Running a remote Headroom proxy for GitHub Copilot's `gpt-5.4` is blocked by int
 | **DiffCompressor** | Keep changes, compress context lines, limit hunks per file | `headroom/transforms/diff_compressor.py` |
 | **SearchCompressor** | Group by file, limit per-file matches | `headroom/transforms/search_compressor.py` |
 | **ContentDetector** | Auto-detect content type and route to appropriate compressor | `headroom/transforms/content_detector.py` |
-| **CCR Store** | Reversible compression — originals cached for retrieval on demand | `headroom/cache/compression_store.py` |
+| **CCR Store** | Reversible compression — originals persisted in SQLite for retrieval across reloads | `headroom/cache/compression_store.py` |
 | **CacheAligner** | Detect volatile content in system prompt (UUID, timestamp, JWT, hash) | `headroom/transforms/cache_aligner.py` |
 
 ## Installation
@@ -59,6 +59,21 @@ npm install
 | `/headroom-compress-config kompress off` | Disable Kompress ML (default) |
 | `/headroom-ccr-status` | Show CCR store stats |
 | `/headroom-retrieve <hash>` | Retrieve original content by CCR hash |
+
+## Footer Status
+
+After the first provider request, the Pi footer shows compression and estimated cost savings:
+
+```text
+compress: -35% ($10.0/$1000.0 saved)
+                └─┬─┘ └──┬──┘
+                  │      └─ all-time savings across sessions
+                  └─ savings in the current Pi session
+```
+
+The percentage is the current session's character reduction. Dollar values are estimates based on approximately 4 characters per token and `$3 / 1M` input tokens; they are not provider billing data. The all-time counter is updated after each request and persisted in `~/.headroom/pi-ccr-store.db`.
+
+Before any provider request, the footer displays `compress: ready`; while disabled, it displays `compress: off`.
 
 ## Architecture
 
@@ -100,7 +115,7 @@ These layers run before or around the content router:
 | **Read Lifecycle** | Pre-detection | Same file read twice within TTL → replace with CCR hash reference |
 | **Output Shaper** | Post-compression | Inject system prompt pressure for concise model output |
 | **TOIN** | Post-compression | Observe which strategy was used and how much was saved (learning only) |
-| **CCR Store** | Post-compression | Cache original content by hash for on-demand retrieval (`/headroom-retrieve`) |
+| **CCR Store** | Post-compression | Persist originals by hash in SQLite for on-demand retrieval (`/headroom-retrieve`) |
 
 ### Decision Summary
 
@@ -128,7 +143,7 @@ Default settings (adjustable via `/headroom-compress-config`):
 | Max assistant msg | 12,000 chars | Trim older assistant messages |
 | SmartCrusher max items | 15 | Keep top-N items from JSON arrays |
 | Code target rate | 0.2 | Keep ~20% of function bodies |
-| CCR TTL | 30 minutes | How long originals are cached |
+| CCR TTL | 30 minutes | How long originals remain in `~/.headroom/pi-ccr-store.db` |
 | Kompress ML | off | ML text compression (~69% savings, ~5s latency) |
 
 ## Benchmark
