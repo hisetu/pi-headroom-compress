@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install reference Headroom
+        run: uv tool install "headroom-ai==0.27.0"
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Compression benchmark
+        run: npm run benchmark
+
+      - name: Golden parity regression gate
+        run: npm run parity

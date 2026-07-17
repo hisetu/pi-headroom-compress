@@ -61,9 +61,11 @@ try {
     ]);
     const headroomQuality = retained(headroom, fixture.required);
     const oursQuality = retained(ours, fixture.required);
+    const oursStrategy = normalizedStrategy(ours.strategy);
     results.push({
       name: fixture.name,
       required: fixture.required,
+      expectedOurs: fixture.expectedOurs,
       headroom,
       ours,
       comparison: {
@@ -74,6 +76,8 @@ try {
         oursSavingsPercent: savings(ours),
         headroomQuality,
         oursQuality,
+        oursDetectionExpected: ours.detection?.type === fixture.expectedOurs.detection,
+        oursStrategyExpected: oursStrategy === fixture.expectedOurs.strategy,
       },
     });
   }
@@ -107,12 +111,18 @@ const identicalOutputs = results.filter(result => result.comparison.outputIdenti
 const headroomMarkerFailures = results.filter(result => result.comparison.headroomQuality.missing.length);
 const oursMarkerFailures = results.filter(result => result.comparison.oursQuality.missing.length);
 const runnerErrors = results.filter(result => result.headroom.error || result.ours.error);
+const regressions = results.filter(result =>
+  !result.comparison.oursDetectionExpected ||
+  !result.comparison.oursStrategyExpected ||
+  result.comparison.oursQuality.missing.length > 0
+);
 
 console.log("────────────────────────────────────────────────────────────────────────────────────────────────");
 console.log(`Detection parity: ${detectionMatches}/${results.length}`);
 console.log(`Strategy-family parity: ${strategyMatches}/${results.length}`);
 console.log(`Byte-identical output: ${identicalOutputs}/${results.length}`);
 console.log(`Critical-marker failures: Headroom ${headroomMarkerFailures.length}, Ours ${oursMarkerFailures.length}`);
+console.log(`Pi regression gate: ${regressions.length === 0 ? "PASS" : `FAIL (${regressions.length})`}`);
 
 for (const result of results) {
   const notes = [];
@@ -120,6 +130,8 @@ for (const result of results) {
   if (!result.comparison.strategyMatch) notes.push(`strategy ${normalizedStrategy(result.headroom.strategy)} != ${normalizedStrategy(result.ours.strategy)}`);
   if (result.comparison.headroomQuality.missing.length) notes.push(`Headroom missing [${result.comparison.headroomQuality.missing.join(", ")}]`);
   if (result.comparison.oursQuality.missing.length) notes.push(`Ours missing [${result.comparison.oursQuality.missing.join(", ")}]`);
+  if (!result.comparison.oursDetectionExpected) notes.push(`Ours detection regression: expected ${result.expectedOurs.detection}`);
+  if (!result.comparison.oursStrategyExpected) notes.push(`Ours strategy regression: expected ${result.expectedOurs.strategy}`);
   if (result.headroom.error) notes.push(`Headroom error: ${result.headroom.error}`);
   if (result.ours.error) notes.push(`Ours error: ${result.ours.error}`);
   if (notes.length) console.log(`- ${result.name}: ${notes.join("; ")}`);
@@ -130,4 +142,4 @@ if (jsonIndex >= 0 && process.argv[jsonIndex + 1]) {
   writeFileSync(process.argv[jsonIndex + 1], JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
 }
 
-if (runnerErrors.length) process.exitCode = 1;
+if (runnerErrors.length || regressions.length) process.exitCode = 1;

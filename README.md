@@ -186,13 +186,15 @@ Run stable fixtures through both the installed Python Headroom implementation an
 npm run parity
 ```
 
-The report compares content detection, normalized strategy families, compression savings, byte-identical output, and critical-marker retention. Known differences are reported rather than hidden; runner failures return a non-zero exit status. Optionally save the complete machine-readable report:
+The report compares content detection, normalized strategy families, compression savings, byte-identical output, and critical-marker retention. Each fixture defines the expected Pi detection and strategy family. The command returns a non-zero exit status if Pi changes unexpectedly, loses a required marker, or either runner fails. Known Headroom differences remain visible but do not fail the Pi regression gate. Optionally save the complete machine-readable report:
 
 ```bash
 node benchmark/parity.mjs --json parity-report.json
 ```
 
 The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
+
+GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI pins reference Headroom to `0.27.0` so upstream changes cannot silently redefine the baseline.
 
 ## Attribution
 

@@ -7,6 +7,7 @@ export const parityFixtures = [
       message: index === 17 ? "CRITICAL_MARKER" : `result-${index}`,
     })), null, 2),
     required: ["src/module-0.ts", "CRITICAL_MARKER", "src/module-29.ts"],
+    expectedOurs: { detection: "json_array", strategy: "smart-crusher" },
   },
   {
     name: "git-diff",
@@ -23,11 +24,13 @@ index 1111111..2222222 100644
  }
 `,
     required: ["src/app.ts", "-oldCall()", "+newCall()", "CRITICAL_MARKER"],
+    expectedOurs: { detection: "diff", strategy: "passthrough" },
   },
   {
     name: "html-document",
     content: `<!doctype html><html><head><title>Parity</title><style>.hidden{display:none}</style></head><body><nav>Navigation noise</nav><main><h1>CRITICAL_MARKER</h1><p>Important article body.</p></main><script>console.log("noise")</script></body></html>`,
     required: ["CRITICAL_MARKER", "Important article body"],
+    expectedOurs: { detection: "html", strategy: "passthrough" },
   },
   {
     name: "csv-table",
@@ -36,6 +39,7 @@ index 1111111..2222222 100644
       ...Array.from({ length: 25 }, (_, index) => `${index},item-${index},${index === 13 ? "CRITICAL_MARKER" : "ok"},team-${index % 3}`),
     ].join("\n"),
     required: ["id,name,status,owner", "CRITICAL_MARKER"],
+    expectedOurs: { detection: "tabular", strategy: "passthrough" },
   },
   {
     name: "ripgrep-search",
@@ -43,6 +47,7 @@ index 1111111..2222222 100644
       `src/module-${index % 8}.ts:${index + 1}: ${index === 31 ? "ERROR CRITICAL_MARKER" : "handleRequest(input)"}`
     ).join("\n"),
     required: ["src/module-0.ts", "handleRequest", "CRITICAL_MARKER"],
+    expectedOurs: { detection: "search", strategy: "search" },
   },
   {
     name: "build-log",
@@ -53,6 +58,7 @@ index 1111111..2222222 100644
       return `[12:00:${String(index % 60).padStart(2, "0")}] INFO compiling module-${index}`;
     }).join("\n"),
     required: ["CRITICAL_MARKER", "src/compiler.ts:99", "deprecated option"],
+    expectedOurs: { detection: "build", strategy: "log" },
   },
   {
     name: "python-source",
@@ -76,6 +82,7 @@ class Processor:
         return True
 `,
     required: ["class Processor", "def process", "def validate"],
+    expectedOurs: { detection: "source_code", strategy: "passthrough" },
   },
   {
     name: "cpp-source",
@@ -95,6 +102,7 @@ public:
 };
 `,
     required: ["class Processor", "process", "CRITICAL_MARKER"],
+    expectedOurs: { detection: "text", strategy: "passthrough" },
   },
   {
     name: "plain-documentation",
@@ -102,5 +110,6 @@ public:
       `Section ${index}. This documentation explains architecture, deployment, monitoring, and recovery. ${index === 20 ? "CRITICAL_MARKER must be retained." : "Use deterministic configuration."}`
     ).join("\n\n"),
     required: ["Section 0", "CRITICAL_MARKER", "Section 34"],
+    expectedOurs: { detection: "text", strategy: "passthrough" },
   },
 ];
