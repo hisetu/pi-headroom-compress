@@ -35,7 +35,7 @@ try:
         strategy = "diff"
     elif content_type == "search":
         from headroom.transforms.search_compressor import SearchCompressor
-        result = SearchCompressor().compress(content)
+        result = SearchCompressor().compress(content, context=fixture.get("query", ""))
         compressed = result.compressed
         strategy = "search"
     elif content_type == "html":

@@ -159,7 +159,7 @@ Default settings (adjustable via `/headroom-compress-config`):
 | Max assistant msg | 12,000 chars | Trim older assistant messages |
 | SmartCrusher max items | 15 | Keep top-N items from JSON arrays |
 | Code target rate | 0.2 | Keep ~20% of function bodies |
-| CCR TTL | 30 minutes | How long originals remain in `~/.headroom/pi-ccr-store.db` |
+| CCR TTL | 30 minutes | How long originals remain in `~/.headroom/pi-ccr-store.db` (24-hex SHA-256 keys; legacy 12-hex markers remain readable) |
 | Kompress ML | off | ML text compression (~69% savings, ~5s latency) |
 
 ## Benchmark
@@ -192,7 +192,7 @@ The report compares content detection, normalized strategy families, compression
 node benchmark/parity.mjs --json parity-report.json
 ```
 
-The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
+The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, Java, C, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
 
 GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI pins reference Headroom to `0.27.0` so upstream changes cannot silently redefine the baseline.
 

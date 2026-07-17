@@ -48,8 +48,8 @@ export function detectContentType(content: string): DetectionResult {
   const lines = content.split("\n");
   const sampleLines = lines.slice(0, 200);
 
-  // 2. Git diff
-  const diffScore = detectDiff(sampleLines);
+  // 2. Git diff — scan farther because git log/format-patch may have a long preamble.
+  const diffScore = detectDiff(lines.slice(0, 500));
   if (diffScore >= 0.7) return { type: "diff", confidence: diffScore, metadata: {} };
 
   // 3. HTML (distinctive structural markup)
@@ -184,6 +184,8 @@ const CODE_PATTERNS: Record<string, RegExp[]> = {
   typescript: [/^\s*(interface|type|enum|namespace)\s+\w+/, /:\s*(string|number|boolean|any|void)\b/],
   go: [/^\s*(func|type|package|import)\s+/],
   rust: [/^\s*(fn|struct|enum|impl|mod|use|pub)\s+/, /^\s*#\[/],
+  java: [/^\s*(public|private|protected)?\s*(class|interface|enum|record)\s+\w+/, /^\s*(public|private|protected|static|final|abstract|synchronized)\s+.*\([^;]*\)\s*\{?$/],
+  c: [/^\s*#\s*(include|define|ifdef|ifndef)\b/, /^\s*(typedef\s+)?(struct|enum|union)\s+\w+/, /^\s*[\w*]+\s+\w+\s*\([^;]*\)\s*\{?$/],
 };
 
 function detectCode(lines: string[]): DetectionResult {
@@ -583,46 +585,66 @@ function compressCode(content: string): string {
 
 // ─── Search Results Compressor ───────────────────────────────────────
 
-function compressSearch(content: string, maxResults = 20): string {
+function compressSearch(content: string, maxResults = 20, context = ""): string {
   const lines = content.split("\n");
   if (lines.length <= maxResults) return content;
 
-  // Group by file
-  const fileGroups = new Map<string, string[]>();
+  type Match = { line: string; lineNumber: number; body: string; score: number };
+  const fileGroups = new Map<string, Match[]>();
+  const contextWords = new Set(
+    context.toLowerCase().split(/\W+/).filter((word) => word.length > 2)
+  );
+  const priorityPatterns = [
+    /\b(ERROR|FATAL|CRITICAL)\b/i,
+    /\b(FAIL|FAILED|EXCEPTION)\b/i,
+    /\b(WARN|WARNING)\b/i,
+  ];
+
   for (const line of lines) {
-    const match = line.match(/^([^:]+):\d+:/);
-    if (match) {
-      const file = match[1];
-      if (!fileGroups.has(file)) fileGroups.set(file, []);
-      fileGroups.get(file)!.push(line);
-    }
-  }
-
-  // Reserve capacity for errors before filling per-file matches. This mirrors
-  // Headroom's error boost and prevents a late critical result from being cut.
-  const criticalRe = /\b(ERROR|FAIL(?:ED)?|FATAL|CRITICAL|EXCEPTION)\b/i;
-  const result: string[] = lines.filter((line) => criticalRe.test(line)).slice(0, maxResults);
-  const selected = new Set(result);
-  const maxPerFile = Math.max(3, Math.floor(maxResults / Math.max(fileGroups.size, 1)));
-
-  for (const [, fileLines] of fileGroups) {
-    const candidates = [fileLines[0], fileLines[fileLines.length - 1], ...fileLines.slice(1, maxPerFile)]
-      .filter((line): line is string => Boolean(line));
-    for (const line of candidates) {
-      if (result.length >= maxResults) break;
-      if (!selected.has(line)) {
-        result.push(line);
-        selected.add(line);
+    const match = line.match(/^(.+?):(\d+)(?::\d+)?:\s?(.*)$/);
+    if (!match) continue;
+    const [, file, lineNumber, body] = match;
+    let score = 0;
+    const lower = body.toLowerCase();
+    for (const word of contextWords) if (lower.includes(word)) score += 0.3;
+    for (let index = 0; index < priorityPatterns.length; index++) {
+      if (priorityPatterns[index].test(body)) {
+        score += 0.5 - index * 0.1;
+        break;
       }
     }
-    if (result.length >= maxResults) break;
+    if (!fileGroups.has(file)) fileGroups.set(file, []);
+    fileGroups.get(file)!.push({ line, lineNumber: Number(lineNumber), body, score: Math.min(1, score) });
   }
 
-  if (lines.length > result.length) {
-    result.push(`\n[${lines.length - result.length} more results omitted | ${fileGroups.size} files total]`);
+  const rankedFiles = [...fileGroups.entries()]
+    .sort((left, right) =>
+      right[1].reduce((sum, item) => sum + item.score, 0) -
+      left[1].reduce((sum, item) => sum + item.score, 0)
+    )
+    .slice(0, 20);
+
+  const selected: string[] = [];
+  for (const [, matches] of rankedFiles) {
+    if (selected.length >= maxResults) break;
+    const first = matches[0];
+    const last = matches[matches.length - 1];
+    const ranked = [...matches].sort((a, b) => b.score - a.score);
+    const perFile: Match[] = [];
+    for (const candidate of [first, last, ...ranked]) {
+      if (!candidate || perFile.some((item) => item.line === candidate.line)) continue;
+      if (perFile.length >= 5 || selected.length + perFile.length >= maxResults) break;
+      perFile.push(candidate);
+    }
+    perFile.sort((a, b) => a.lineNumber - b.lineNumber);
+    selected.push(...perFile.map((item) => item.line));
   }
 
-  return result.join("\n");
+  if (lines.length > selected.length) {
+    selected.push(`\n[${lines.length - selected.length} more results omitted | ${fileGroups.size} files total]`);
+  }
+
+  return selected.join("\n");
 }
 
 // ─── Main Compression Router ─────────────────────────────────────────
@@ -655,7 +677,7 @@ export function compressContent(content: string, query = ""): { compressed: stri
       return { compressed: codeResult, wasModified: codeResult !== content, strategy: "code_compressor_regex" };
     }
     case "search":
-      const searchResult = compressSearch(content);
+      const searchResult = compressSearch(content, 20, query);
       return { compressed: searchResult, wasModified: searchResult !== content, strategy: "search_compressor" };
     default: {
       // Plain text: try Kompress ML first

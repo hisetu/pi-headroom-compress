@@ -46,6 +46,7 @@ index 1111111..2222222 100644
     content: Array.from({ length: 60 }, (_, index) =>
       `src/module-${index % 8}.ts:${index + 1}: ${index === 31 ? "ERROR CRITICAL_MARKER" : "handleRequest(input)"}`
     ).join("\n"),
+    query: "find CRITICAL_MARKER errors",
     required: ["src/module-0.ts", "handleRequest", "CRITICAL_MARKER"],
     expectedOurs: { detection: "search", strategy: "search" },
   },
@@ -83,6 +84,22 @@ class Processor:
 `,
     required: ["class Processor", "def process", "def validate"],
     expectedOurs: { detection: "source_code", strategy: "passthrough" },
+  },
+  {
+    name: "java-source",
+    content: `public class Service {\n` + Array.from({ length: 12 }, (_, index) =>
+      `  public int method${index}(int value) {\n    int adjusted = value + ${index};\n    if (adjusted == 42) System.out.println("${index === 6 ? "CRITICAL_MARKER" : "value"}");\n    return adjusted * 2;\n  }\n`
+    ).join("\n") + `}\n`,
+    required: ["class Service", "method0", "method11"],
+    expectedOurs: { detection: "source_code", strategy: "code" },
+  },
+  {
+    name: "c-source",
+    content: `#include <stdio.h>\n#define LIMIT 100\nstruct Item { int value; };\n\n` + Array.from({ length: 12 }, (_, index) =>
+      `int process_${index}(int value) {\n  int adjusted = value + ${index};\n  if (adjusted == 42) printf("${index === 6 ? "CRITICAL_MARKER" : "value"}");\n  return adjusted * LIMIT;\n}\n`
+    ).join("\n"),
+    required: ["struct Item", "process_0", "process_11"],
+    expectedOurs: { detection: "source_code", strategy: "code" },
   },
   {
     name: "cpp-source",

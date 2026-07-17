@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const MAX_ENTRIES = 500;
+const MAX_ENTRIES = 1000;
 const PURGE_INTERVAL_MS = 60_000; // purge expired rows at most once per minute
 
 export interface SavingsEvent {
@@ -63,9 +63,9 @@ export class CCRStore {
     this.open();
   }
 
-  /** Compute a 12-char hex hash of content. */
+  /** Compute Headroom's default 24-char (96-bit) SHA-256 cache key. */
   static hash(content: string): string {
-    return createHash("sha256").update(content).digest("hex").slice(0, 12);
+    return createHash("sha256").update(content).digest("hex").slice(0, 24);
   }
 
   /** Store original content and return the hash key. */
@@ -310,6 +310,7 @@ export function formatCCRMarker(hash: string, itemCount: number): string {
 
 /** Extract CCR hash from a marker string. */
 export function extractCCRHash(text: string): string | null {
-  const match = text.match(/⟨ccr:([0-9a-f]{12})/);
+  // Accept legacy 12-char markers while emitting 24-char keys for new entries.
+  const match = text.match(/⟨ccr:([0-9a-f]{12,24})/);
   return match ? match[1] : null;
 }

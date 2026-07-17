@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CCRStore } from "../src/ccr-store.ts";
+import { CCRStore, extractCCRHash } from "../src/ccr-store.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "pi-headroom-ccr-test-"));
 const databasePath = join(directory, "ccr.db");
@@ -11,6 +11,9 @@ const databasePath = join(directory, "ccr.db");
 try {
   const first = new CCRStore(30_000, databasePath);
   const hash = first.store("original content", "compressed", "test", "test_strategy");
+  assert.equal(hash.length, 24);
+  assert.equal(extractCCRHash(`⟨ccr:${hash} stored⟩`), hash);
+  assert.equal(extractCCRHash("⟨ccr:123456789abc legacy⟩"), "123456789abc");
   first.recordSavingsEvent({
     timestamp: 1,
     model: "gpt-test",

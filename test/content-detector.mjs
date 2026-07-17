@@ -23,6 +23,36 @@ const search = Array.from({ length: 30 }, (_, index) =>
 ).join("\n");
 assert.equal(detectContentType(search).type, "search");
 
+const longPreambleDiff = [
+  ...Array.from({ length: 300 }, (_, index) => `commit message line ${index}`),
+  "diff --git a/file.ts b/file.ts",
+  "--- a/file.ts",
+  "+++ b/file.ts",
+  "@@ -1,1 +1,1 @@",
+  "-old",
+  "+new",
+].join("\n");
+assert.equal(detectContentType(longPreambleDiff).type, "diff");
+
+const java = `public class Service {
+  private final String name;
+  public Service(String name) {
+    this.name = name;
+  }
+  public String getName() {
+    return name;
+  }
+}`;
+assert.equal(detectContentType(java).metadata.language, "java");
+
+const cSource = `#include <stdio.h>
+#define LIMIT 10
+struct Item { int value; };
+int process(int value) {
+  return value * LIMIT;
+}`;
+assert.equal(detectContentType(cSource).metadata.language, "c");
+
 const searchWithLateError = Array.from({ length: 60 }, (_, index) =>
   `src/module-${index % 8}.ts:${index + 1}: ${index === 31 ? "ERROR CRITICAL_MARKER" : "handleRequest(input)"}`
 ).join("\n");
