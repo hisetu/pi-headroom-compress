@@ -52,15 +52,23 @@ export function detectContentType(content: string): DetectionResult {
   const diffScore = detectDiff(sampleLines);
   if (diffScore >= 0.7) return { type: "diff", confidence: diffScore, metadata: {} };
 
-  // 3. Search results (file:line: pattern)
+  // 3. HTML (distinctive structural markup)
+  const htmlResult = detectHtml(content);
+  if (htmlResult.confidence >= 0.7) return htmlResult;
+
+  // 4. Search results (file:line: pattern)
   const searchScore = detectSearch(sampleLines);
   if (searchScore >= 0.6) return { type: "search", confidence: searchScore, metadata: {} };
 
-  // 4. Build/log output
+  // 5. Build/log output
   const logScore = detectLog(sampleLines);
   if (logScore >= 0.5) return { type: "build", confidence: logScore, metadata: {} };
 
-  // 5. Source code
+  // 6. Tabular data after search/log to avoid delimiter false positives
+  const tabularResult = detectTabular(sampleLines);
+  if (tabularResult.confidence >= 0.6) return tabularResult;
+
+  // 7. Source code
   const codeResult = detectCode(sampleLines);
   if (codeResult.confidence >= 0.5) return codeResult;
 
@@ -80,15 +88,63 @@ function detectDiff(lines: string[]): number {
   return Math.min(1.0, 0.5 + headers * 0.2 + changes * 0.01);
 }
 
-const SEARCH_RE = /^[^\s:]+:\d+:/;
+const SEARCH_RE = /^(?:[A-Za-z]:[\\/])?.+?:\d+(?::\d+)?:/;
+const CLOCK_LOG_RE = /^\s*\[\d{1,2}:\d{2}(?::\d{2})?\]/;
+const ISO_LOG_RE = /^\s*\d{4}-\d{2}-\d{2}[T\s]/;
 
 function detectSearch(lines: string[]): number {
   const nonEmpty = lines.filter((l) => l.trim());
   if (nonEmpty.length === 0) return 0;
-  const matches = nonEmpty.filter((l) => SEARCH_RE.test(l)).length;
+  const matches = nonEmpty.filter((line) =>
+    !CLOCK_LOG_RE.test(line) && !ISO_LOG_RE.test(line) && SEARCH_RE.test(line)
+  ).length;
   const ratio = matches / nonEmpty.length;
   if (ratio < 0.3) return 0;
   return Math.min(1.0, 0.4 + ratio * 0.6);
+}
+
+function detectHtml(content: string): DetectionResult {
+  const sample = content.slice(0, 3000);
+  const hasDoctype = /^\s*<!doctype\s+html/i.test(sample);
+  const hasHtml = /<html[\s>]/i.test(sample);
+  const hasHead = /<head[\s>]/i.test(sample);
+  const hasBody = /<body[\s>]/i.test(sample);
+  const structuralTags = sample.match(/<(div|span|script|style|link|meta|nav|header|footer|aside|article|section|main)[\s>]/gi)?.length ?? 0;
+  if (!hasDoctype && !hasHtml && structuralTags < 3) {
+    return { type: "html", confidence: 0, metadata: {} };
+  }
+  const confidence = Math.min(1, (hasDoctype ? 0.5 : 0) + (hasHtml ? 0.3 : 0) +
+    (hasHead ? 0.1 : 0) + (hasBody ? 0.1 : 0) + Math.min(0.3, structuralTags * 0.03));
+  return { type: "html", confidence, metadata: { hasDoctype, hasHtml, structuralTags } };
+}
+
+function detectTabular(lines: string[]): DetectionResult {
+  const nonEmpty = lines.filter((line) => line.trim()).slice(0, 100);
+  if (nonEmpty.length < 3) return { type: "tabular", confidence: 0, metadata: {} };
+
+  // Markdown table: header followed by separator row.
+  if (nonEmpty[0].includes("|") && /^\s*\|?\s*:?-{3,}/.test(nonEmpty[1]) && nonEmpty[1].includes("|")) {
+    return { type: "tabular", confidence: 0.95, metadata: { delimiter: "markdown" } };
+  }
+
+  for (const delimiter of [",", "\t"]) {
+    const headerCells = nonEmpty[0].split(delimiter);
+    const expectedColumns = headerCells.length;
+    if (expectedColumns < 2) continue;
+    // Avoid treating repeated prose sentences containing commas as CSV.
+    if (delimiter === "," && (nonEmpty[0].includes(". ") || headerCells.some((cell) => cell.trim().length > 64))) continue;
+    const matching = nonEmpty.filter((line) => line.split(delimiter).length === expectedColumns).length;
+    const ratio = matching / nonEmpty.length;
+    if (ratio >= 0.8) {
+      return {
+        type: "tabular",
+        confidence: Math.min(1, 0.5 + ratio * 0.4 + Math.min(0.1, expectedColumns * 0.02)),
+        metadata: { delimiter: delimiter === "\t" ? "tsv" : "csv", columns: expectedColumns },
+      };
+    }
+  }
+
+  return { type: "tabular", confidence: 0, metadata: {} };
 }
 
 const LOG_PATTERNS = [
@@ -542,14 +598,22 @@ function compressSearch(content: string, maxResults = 20): string {
     }
   }
 
-  // Keep first few results per file, up to maxResults total
-  const result: string[] = [];
+  // Reserve capacity for errors before filling per-file matches. This mirrors
+  // Headroom's error boost and prevents a late critical result from being cut.
+  const criticalRe = /\b(ERROR|FAIL(?:ED)?|FATAL|CRITICAL|EXCEPTION)\b/i;
+  const result: string[] = lines.filter((line) => criticalRe.test(line)).slice(0, maxResults);
+  const selected = new Set(result);
   const maxPerFile = Math.max(3, Math.floor(maxResults / Math.max(fileGroups.size, 1)));
 
   for (const [, fileLines] of fileGroups) {
-    result.push(...fileLines.slice(0, maxPerFile));
-    if (fileLines.length > maxPerFile) {
-      result.push(`  ... (${fileLines.length - maxPerFile} more matches in this file)`);
+    const candidates = [fileLines[0], fileLines[fileLines.length - 1], ...fileLines.slice(1, maxPerFile)]
+      .filter((line): line is string => Boolean(line));
+    for (const line of candidates) {
+      if (result.length >= maxResults) break;
+      if (!selected.has(line)) {
+        result.push(line);
+        selected.add(line);
+      }
     }
     if (result.length >= maxResults) break;
   }

@@ -113,10 +113,12 @@ Each tool output block is first classified by `detectContentType()`, which sampl
 |----------|---------------|------|------------|-------------|
 | 1 | Starts with `[`, valid JSON array | `json_array` | **SmartCrusher** | BM25-scored top-N + tail items, dedup, lossless tabular compaction |
 | 2 | `diff --git` headers + `+/-` lines ≥ 0.7 confidence | `diff` | **DiffCompressor** | Keep hunk headers + changed lines + 2 context lines; cap hunks per file |
-| 3 | `file:line:` pattern in > 30% of lines | `search` | **SearchCompressor** | Group by file, keep first 3 hits per file, summarize remainder |
-| 4 | `ERROR/WARN/INFO/DEBUG` keywords in > 50% of lines | `build` | **LogCompressor** | Prioritize errors + stack traces + summary; skip repetitive INFO lines |
-| 5 | `def/class/func/import/const` keywords in > 50% of sample | `source_code` | **CodeCompressor** | AST via tree-sitter (body budget allocation); regex fallback if AST fails |
-| 6 | None of the above | `text` | **Kompress ML** → mid-truncate → passthrough | ML compression if available and text is large enough; else truncate center |
+| 3 | HTML doctype/root/structural tags ≥ 0.7 confidence | `html` | passthrough | Detect HTML without routing it into an unsafe generic compressor |
+| 4 | `file:line:` pattern in > 30% of lines, excluding clock/ISO timestamps | `search` | **SearchCompressor** | Reserve errors, then retain first/last per-file hits within the global cap |
+| 5 | `ERROR/WARN/INFO/DEBUG` and log structure ≥ 0.5 confidence | `build` | **LogCompressor** | Prioritize errors + stack traces + summary; skip repetitive INFO lines |
+| 6 | Consistent CSV/TSV columns or Markdown table separator | `tabular` | passthrough | Detect structured tables while avoiding repeated prose with commas |
+| 7 | `def/class/func/import/const` code patterns ≥ 0.5 confidence | `source_code` | **CodeCompressor** | AST via tree-sitter (body budget allocation); regex fallback if AST fails |
+| 8 | None of the above | `text` | **Kompress ML** → mid-truncate → passthrough | ML compression if enabled and text is large enough; else truncate center |
 
 ### Additional Processing Layers
 

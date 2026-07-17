@@ -40,7 +40,7 @@ index 1111111..2222222 100644
   {
     name: "ripgrep-search",
     content: Array.from({ length: 60 }, (_, index) =>
-      `src/module-${index % 8}.ts:${index + 1}: ${index === 31 ? "CRITICAL_MARKER" : "handleRequest(input)"}`
+      `src/module-${index % 8}.ts:${index + 1}: ${index === 31 ? "ERROR CRITICAL_MARKER" : "handleRequest(input)"}`
     ).join("\n"),
     required: ["src/module-0.ts", "handleRequest", "CRITICAL_MARKER"],
   },
