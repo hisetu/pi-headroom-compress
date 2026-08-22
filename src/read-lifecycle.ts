@@ -133,14 +133,15 @@ export function applyReadLifecycle(
     if (output.length < config.minSizeChars) return item;
 
     // Store in CCR before replacing
+    let hash: string | undefined;
     if (ccrStore) {
-      ccrStore.store(output, "", classification.filePath);
+      hash = ccrStore.store(output, "", classification.filePath);
     }
 
-    // Replace with marker
+    const preview = hash ? ` preview /headroom-retrieve ${hash} or` : "";
     const marker = classification.state === "stale"
-      ? `[Read content stale: ${classification.filePath} was modified after this read — re-read the file for current content]`
-      : `[Read content superseded: ${classification.filePath} was re-read later — use the newer read]`;
+      ? `[Read content stale: ${classification.filePath} was modified after this read —${preview} re-read the file for current content]`
+      : `[Read content superseded: ${classification.filePath} was re-read later —${preview} use the newer read]`;
 
     charsSaved += output.length - marker.length;
     return { ...item, output: marker };

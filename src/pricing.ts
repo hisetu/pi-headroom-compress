@@ -34,29 +34,62 @@ export function estimateTextTokens(chars: number): number {
   return Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN);
 }
 
+function readValidPrice(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
 export function resolveInputPricePer1M(
   model: PricingModel | undefined,
   totalInputTokens: number,
 ): { price: number; source: SavingsEstimate["pricingSource"] } {
-  const basePrice = Number(model?.cost?.input);
-  let price = Number.isFinite(basePrice) && basePrice > 0
-    ? basePrice
-    : FALLBACK_INPUT_COST_PER_1M;
-  let source: SavingsEstimate["pricingSource"] = price === FALLBACK_INPUT_COST_PER_1M && !(basePrice > 0)
-    ? "fallback"
-    : "model";
+  const basePrice = readValidPrice(model?.cost?.input);
+  let price: number;
+  let source: SavingsEstimate["pricingSource"];
 
-  const tiers = model?.cost?.tiers ?? [];
-  const matchingTiers = tiers
-    .filter(tier => Number.isFinite(tier.inputTokensAbove) && totalInputTokens > tier.inputTokensAbove)
-    .sort((a, b) => b.inputTokensAbove - a.inputTokensAbove);
-  const tierPrice = Number(matchingTiers[0]?.input);
-  if (Number.isFinite(tierPrice) && tierPrice > 0) {
-    price = tierPrice;
+  if (basePrice !== null) {
+    price = basePrice;
+    source = "model";
+  } else {
+    price = FALLBACK_INPUT_COST_PER_1M;
+    source = "fallback";
+  }
+
+  if (!Number.isFinite(totalInputTokens) || totalInputTokens < 0) {
+    return { price, source };
+  }
+
+  const rawTiers: unknown[] = Array.isArray(model?.cost?.tiers) ? model.cost.tiers : [];
+  const matchingTiers = rawTiers.flatMap((tier) => {
+    if (typeof tier !== "object" || tier === null) return [];
+    const candidate = tier as { inputTokensAbove?: unknown; input?: unknown };
+    const threshold = candidate.inputTokensAbove;
+    const tierPrice = readValidPrice(candidate.input);
+    if (
+      typeof threshold !== "number" ||
+      !Number.isFinite(threshold) ||
+      threshold < 0 ||
+      totalInputTokens <= threshold ||
+      tierPrice === null
+    ) {
+      return [];
+    }
+    return [{ threshold, price: tierPrice }];
+  }).sort((a, b) => b.threshold - a.threshold);
+
+  if (matchingTiers.length > 0) {
+    price = matchingTiers[0].price;
     source = "model-tier";
   }
 
   return { price, source };
+}
+
+function estimateRequestCost(tokens: number, model?: PricingModel): number {
+  const { price } = resolveInputPricePer1M(model, tokens);
+  return tokens * price / 1_000_000;
 }
 
 export function estimateCompressionSavings(
@@ -68,6 +101,8 @@ export function estimateCompressionSavings(
   const tokensAfter = estimateTextTokens(compressedChars);
   const tokensSaved = Math.max(0, tokensBefore - tokensAfter);
   const { price, source } = resolveInputPricePer1M(model, tokensBefore);
+  const costBefore = estimateRequestCost(tokensBefore, model);
+  const costAfter = estimateRequestCost(tokensAfter, model);
 
   return {
     model: model?.id || "unknown",
@@ -76,7 +111,7 @@ export function estimateCompressionSavings(
     tokensAfter,
     tokensSaved,
     inputCostPer1M: price,
-    costUsd: tokensSaved * price / 1_000_000,
+    costUsd: Math.max(0, costBefore - costAfter),
     pricingSource: source,
   };
 }

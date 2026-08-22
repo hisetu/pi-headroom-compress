@@ -7,12 +7,13 @@
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { describeHeadroomReference, resolveHeadroomPython } from "./headroom-python.mjs";
 
 const benchmarkDir = dirname(fileURLToPath(import.meta.url));
-const python = join(homedir(), ".local/share/uv/tools/headroom-ai/bin/python");
+const python = resolveHeadroomPython();
 const workDir = mkdtempSync(join(tmpdir(), "pi-headroom-bench-"));
 const inputPath = join(workDir, "input.json");
 
@@ -130,6 +131,7 @@ const pct = value => value === null ? "ERR" : `${value.toFixed(1)}%`;
 const q = value => value === null ? "ERR" : `${value.retained}/${value.total}`;
 
 console.log("\npi-headroom-compress vs Headroom — real implementation benchmark\n");
+console.log(`Reference Headroom: ${describeHeadroomReference()} (${python})\n`);
 console.log("Sample                         Headroom   Ours       Gap       Quality H/O");
 console.log("─────────────────────────────────────────────────────────────────────────");
 for (const row of rows) {
