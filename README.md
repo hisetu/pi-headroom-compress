@@ -62,7 +62,7 @@ npm install
 | `/headroom-compress-config kompress on` | Enable Kompress ML (adds ~5s per text block) |
 | `/headroom-compress-config kompress off` | Disable Kompress ML (default) |
 | `/headroom-ccr-status` | Show CCR store stats |
-| `/headroom-retrieve <hash>` | Retrieve original content by CCR hash |
+| `/headroom-retrieve <hash>` | Preview original CCR content by hash (first 2,000 chars) |
 
 ## Footer Status
 
@@ -131,7 +131,7 @@ These layers run before or around the content router:
 | **Read Lifecycle** | Pre-detection | Same file read twice within TTL → replace with CCR hash reference |
 | **Output Shaper** | Post-compression | Inject system prompt pressure for concise model output |
 | **TOIN** | Post-compression | Observe which strategy was used and how much was saved (learning only) |
-| **CCR Store** | Post-compression | Persist originals by hash in SQLite for on-demand retrieval (`/headroom-retrieve`) |
+| **CCR Store** | Post-compression | Persist originals by hash in SQLite for on-demand preview via `/headroom-retrieve` |
 
 ### Decision Summary
 
@@ -164,11 +164,20 @@ Default settings (adjustable via `/headroom-compress-config`):
 
 ## Benchmark
 
-Run the end-to-end comparison against the installed Python Headroom package:
+Run the end-to-end comparison against a reference Headroom Python install:
 
 ```bash
 npm run benchmark
 ```
+
+By default this resolves uv's platform-specific `headroom-ai` tool environment (for example, `~/.local/share/uv/tools/headroom-ai/bin/python` on Unix). Override the executable explicitly when comparing another install:
+
+```bash
+HEADROOM_PYTHON=/path/to/python npm run benchmark
+HEADROOM_REFERENCE=headroom-ai==0.36.2 HEADROOM_PYTHON=/path/to/python npm run parity
+```
+
+`HEADROOM_REFERENCE` is a display label only (shown in parity/benchmark output); it does not select or validate the Python interpreter. The resolved interpreter path is printed alongside the label.
 
 The benchmark imports the extension's real TypeScript `compressContent()` function—there is no benchmark-only reimplementation. It reports:
 
@@ -194,7 +203,7 @@ node benchmark/parity.mjs --json parity-report.json
 
 The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, Java, C, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
 
-GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI pins reference Headroom to `0.27.0` so upstream changes cannot silently redefine the baseline.
+GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI exercises parity against both `headroom-ai[code]==0.27.0` (legacy baseline) and `headroom-ai[code]==0.36.2` (current upstream reference) in isolated matrix jobs. Each job installs the matrix-pinned Headroom with its code extras via `uv tool install` and labels the run with `HEADROOM_REFERENCE` so both versions remain observable.
 
 ## Attribution
 

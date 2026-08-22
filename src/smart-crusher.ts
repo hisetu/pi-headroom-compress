@@ -1,16 +1,9 @@
 /**
  * SmartCrusher — JSON array compression with BM25 scoring + tabular compaction
- * 
- * Streamlined implementation inspired by headroom/transforms/smart_crusher.py;
- * output and scoring are not byte-compatible with Headroom's Rust backend.
- * 
- * Strategy priority:
- * 1. Deduplication (identical items)
- * 2. Lossless tabular compaction (JSON → CSV-schema)
- * 3. Lossy row-drop with BM25 scoring (keep first/last + relevant middle)
  */
 
-import { CCRStore, formatCCRMarker } from "./ccr-store.ts";
+import { CCRStore, formatCCRMarker, isCCRReferenceContent } from "./ccr-store.ts";
+import { normalizeConcatenatedJson } from "./json-array-utils.ts";
 
 export interface SmartCrusherConfig {
   maxItemsAfterCrush: number;
@@ -39,93 +32,122 @@ export interface CrushResult {
   ccrHash?: string;
 }
 
+function acceptIfShorter(
+  original: string,
+  compressed: string,
+  strategy: string,
+  ccrHash?: string,
+): CrushResult {
+  if (compressed.length >= original.length) {
+    return { compressed: original, wasModified: false, strategy: "passthrough" };
+  }
+  return { compressed, wasModified: true, strategy, ccrHash };
+}
+
+function safeStringify(value: unknown): string {
+  return JSON.stringify(value, null, 1);
+}
+
 export function smartCrush(
   content: string,
   query: string,
   config = DEFAULT_CONFIG,
-  ccrStore?: CCRStore
+  ccrStore?: CCRStore,
 ): CrushResult {
-  let items: unknown[];
+  if (isCCRReferenceContent(content)) {
+    return { compressed: content, wasModified: false, strategy: "ccr_reference_passthrough" };
+  }
+
   try {
-    items = JSON.parse(content);
-    if (!Array.isArray(items)) return { compressed: content, wasModified: false, strategy: "passthrough" };
+    const normalized = normalizeConcatenatedJson(content);
+    const jsonContent = normalized ?? content;
+
+    let items: unknown[];
+    try {
+      items = JSON.parse(jsonContent);
+      if (!Array.isArray(items)) return { compressed: content, wasModified: false, strategy: "passthrough" };
+    } catch {
+      return { compressed: content, wasModified: false, strategy: "passthrough" };
+    }
+
+    if (items.length < config.minItemsToAnalyze) {
+      return { compressed: content, wasModified: false, strategy: "passthrough" };
+    }
+
+    const originalCount = items.length;
+    const deduped = config.dedupIdentical ? deduplicateItems(items) : items;
+    const dedupSaved = originalCount - deduped.length;
+
+    if (deduped.length <= config.maxItemsAfterCrush) {
+      if (dedupSaved > 0) {
+        return acceptIfShorter(content, safeStringify(deduped), `dedup:${dedupSaved}`);
+      }
+      const tabular = tryTabularCompaction(deduped, config.losslessMinSavingsRatio);
+      if (tabular) return acceptIfShorter(content, tabular, "tabular_compaction");
+      return { compressed: content, wasModified: false, strategy: "passthrough" };
+    }
+
+    const tabular = tryTabularCompaction(deduped, config.losslessMinSavingsRatio);
+    if (tabular && tabular.length < content.length * (1 - config.losslessMinSavingsRatio)) {
+      return acceptIfShorter(content, tabular, "tabular_compaction");
+    }
+
+    const maxKeep = config.maxItemsAfterCrush;
+    const firstKeep = Math.max(1, Math.floor(maxKeep * config.firstFraction));
+    const lastKeep = Math.max(1, Math.floor(maxKeep * config.lastFraction));
+    const middleBudget = maxKeep - firstKeep - lastKeep;
+
+    const first = deduped.slice(0, firstKeep);
+    const last = deduped.slice(-lastKeep);
+    const middle = deduped.slice(firstKeep, deduped.length - lastKeep);
+
+    let selectedMiddle: unknown[];
+    if (middleBudget >= middle.length) {
+      selectedMiddle = middle;
+    } else {
+      const terms = buildQueryTerms(query);
+      const idf = computeIDF(middle, terms);
+      const scored = middle.map((item, i) => ({
+        item,
+        index: i,
+        score: bm25Score(item, terms, idf) + changePointBonus(item, middle, i, config.preserveChangePoints),
+      }));
+      scored.sort((a, b) => b.score - a.score);
+      selectedMiddle = scored
+        .slice(0, middleBudget)
+        .sort((a, b) => a.index - b.index)
+        .map((s) => s.item);
+    }
+
+    const result = [...first, ...selectedMiddle, ...last];
+    const omitted = originalCount - result.length;
+
+    if (omitted <= 0) {
+      return acceptIfShorter(content, safeStringify(result), "row_drop:0");
+    }
+
+    const previewMarker = formatCCRMarker("f".repeat(24), omitted);
+    const preview = ccrStore
+      ? safeStringify([...result, { _ccr_dropped: previewMarker }])
+      : safeStringify([...result, { _compressed: `${omitted} items omitted` }]);
+    if (preview.length >= content.length) {
+      return { compressed: content, wasModified: false, strategy: "passthrough" };
+    }
+
+    let ccrHash: string | undefined;
+    const output = [...result];
+    if (ccrStore) {
+      ccrHash = ccrStore.store(content, safeStringify(result));
+      output.push({ _ccr_dropped: formatCCRMarker(ccrHash, omitted) });
+    } else {
+      output.push({ _compressed: `${omitted} items omitted` });
+    }
+
+    return acceptIfShorter(content, safeStringify(output), `row_drop:${omitted}`, ccrHash);
   } catch {
     return { compressed: content, wasModified: false, strategy: "passthrough" };
   }
-
-  if (items.length < config.minItemsToAnalyze) return { compressed: content, wasModified: false, strategy: "passthrough" };
-
-  // 1. Deduplication
-  const deduped = config.dedupIdentical ? deduplicateItems(items) : items;
-  const dedupSaved = items.length - deduped.length;
-
-  if (deduped.length <= config.maxItemsAfterCrush) {
-    if (dedupSaved > 0) {
-      const compressed = JSON.stringify(deduped, null, 1);
-      return { compressed, wasModified: true, strategy: `dedup:${dedupSaved}` };
-    }
-    // Try lossless compaction even if under the limit
-    const tabular = tryTabularCompaction(deduped, config.losslessMinSavingsRatio);
-    if (tabular) return { compressed: tabular, wasModified: true, strategy: "tabular_compaction" };
-    return { compressed: content, wasModified: false, strategy: "passthrough" };
-  }
-
-  // 2. Try lossless tabular compaction first
-  const tabular = tryTabularCompaction(deduped, config.losslessMinSavingsRatio);
-  if (tabular && tabular.length < content.length * (1 - config.losslessMinSavingsRatio)) {
-    return { compressed: tabular, wasModified: true, strategy: "tabular_compaction" };
-  }
-
-  // 3. Lossy row-drop with BM25 scoring
-  const maxKeep = config.maxItemsAfterCrush;
-  const firstKeep = Math.max(1, Math.floor(maxKeep * config.firstFraction));
-  const lastKeep = Math.max(1, Math.floor(maxKeep * config.lastFraction));
-  const middleBudget = maxKeep - firstKeep - lastKeep;
-
-  const first = deduped.slice(0, firstKeep);
-  const last = deduped.slice(-lastKeep);
-  const middle = deduped.slice(firstKeep, deduped.length - lastKeep);
-
-  let selectedMiddle: unknown[];
-  if (middleBudget >= middle.length) {
-    selectedMiddle = middle;
-  } else {
-    // BM25-like scoring
-    const terms = buildQueryTerms(query);
-    const idf = computeIDF(middle, terms);
-    const scored = middle.map((item, i) => ({
-      item,
-      index: i,
-      score: bm25Score(item, terms, idf) + changePointBonus(item, middle, i, config.preserveChangePoints),
-    }));
-    scored.sort((a, b) => b.score - a.score);
-    selectedMiddle = scored
-      .slice(0, middleBudget)
-      .sort((a, b) => a.index - b.index)
-      .map((s) => s.item);
-  }
-
-  const result = [...first, ...selectedMiddle, ...last];
-  const omitted = deduped.length - result.length;
-
-  // Store in CCR if available
-  let ccrHash: string | undefined;
-  if (ccrStore && omitted > 0) {
-    ccrHash = ccrStore.store(content, JSON.stringify(result, null, 1));
-    result.push({ _ccr_dropped: formatCCRMarker(ccrHash, omitted) });
-  } else if (omitted > 0) {
-    result.push({ _compressed: `${omitted} items omitted` });
-  }
-
-  return {
-    compressed: JSON.stringify(result, null, 1),
-    wasModified: true,
-    strategy: `row_drop:${omitted}`,
-    ccrHash,
-  };
 }
-
-// ─── BM25 Scoring ────────────────────────────────────────────────────
 
 function buildQueryTerms(query: string): string[] {
   return query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
@@ -148,7 +170,7 @@ function bm25Score(item: unknown, terms: string[], idf: Map<string, number>): nu
   if (terms.length === 0) return 0;
   const text = JSON.stringify(item).toLowerCase();
   const textLen = text.length;
-  const avgLen = 200; // approximate
+  const avgLen = 200;
   const k1 = 1.2, b = 0.75;
 
   let score = 0;
@@ -160,7 +182,6 @@ function bm25Score(item: unknown, terms: string[], idf: Map<string, number>): nu
     score += idfVal * tfNorm;
   }
 
-  // Boost error/warning items
   if (/error|fail|exception|critical/i.test(text)) score += 2.0;
   if (/warn|warning/i.test(text)) score += 1.0;
 
@@ -173,7 +194,6 @@ function countOccurrences(text: string, term: string): number {
   return count;
 }
 
-/** Bonus for items that differ structurally from their neighbors. */
 function changePointBonus(item: unknown, items: unknown[], index: number, enabled: boolean): number {
   if (!enabled || items.length < 3) return 0;
   const current = Object.keys(typeof item === "object" && item !== null ? item : {});
@@ -182,7 +202,7 @@ function changePointBonus(item: unknown, items: unknown[], index: number, enable
 
   const prevSim = setOverlap(current, prev);
   const nextSim = setOverlap(current, next);
-  if (prevSim < 0.5 || nextSim < 0.5) return 1.5; // Change point
+  if (prevSim < 0.5 || nextSim < 0.5) return 1.5;
   return 0;
 }
 
@@ -193,51 +213,51 @@ function setOverlap(a: string[], b: string[]): number {
   return intersection / Math.max(a.length, b.length);
 }
 
-// ─── Lossless Tabular Compaction (JSON → CSV-schema) ─────────────────
+function sortedFieldKeys(record: Record<string, unknown>): string[] {
+  return Object.keys(record).sort();
+}
+
+function recordsHaveIdenticalFieldSets(records: Record<string, unknown>[]): string[] | null {
+  if (records.length === 0) return null;
+  const reference = sortedFieldKeys(records[0]);
+  for (const record of records) {
+    const keys = sortedFieldKeys(record);
+    if (keys.length !== reference.length || keys.some((key, index) => key !== reference[index])) {
+      return null;
+    }
+  }
+  return reference;
+}
+
+function escapeCsvCell(value: string): string {
+  return value.includes(",") || value.includes("\n") || value.includes("\r") || value.includes('"')
+    ? `"${value.replace(/"/g, '""')}"`
+    : value;
+}
 
 function tryTabularCompaction(items: unknown[], minSavingsRatio: number): string | null {
-  // Only works on arrays of uniform objects
   if (items.length < 3) return null;
   if (!items.every((item) => typeof item === "object" && item !== null && !Array.isArray(item))) return null;
 
   const records = items as Record<string, unknown>[];
+  const fields = recordsHaveIdenticalFieldSets(records);
+  if (!fields || fields.length < 2) return null;
 
-  // Find core fields (present in ≥80% of records)
-  const fieldCounts = new Map<string, number>();
-  for (const rec of records) {
-    for (const key of Object.keys(rec)) {
-      fieldCounts.set(key, (fieldCounts.get(key) || 0) + 1);
-    }
-  }
+  if (records.some((record) => fields.some((key) => record[key] === null))) return null;
 
-  const coreThreshold = records.length * 0.8;
-  const coreFields = [...fieldCounts.entries()]
-    .filter(([, count]) => count >= coreThreshold)
-    .map(([key]) => key);
-
-  if (coreFields.length < 2) return null;
-
-  // Check if all values are simple (string/number/boolean/null)
   const allSimple = records.every((rec) =>
-    coreFields.every((key) => {
+    fields.every((key) => {
       const val = rec[key];
-      return val === null || typeof val === "string" || typeof val === "number" || typeof val === "boolean";
+      return typeof val === "string" || typeof val === "number" || typeof val === "boolean";
     })
   );
-
   if (!allSimple) return null;
 
-  // Build CSV-schema format
-  const header = coreFields.join(",");
+  const header = fields.map((field) => escapeCsvCell(field)).join(",");
   const rows = records.map((rec) =>
-    coreFields.map((key) => {
+    fields.map((key) => {
       const val = rec[key];
-      if (val === null) return "";
-      if (typeof val === "string") {
-        return val.includes(",") || val.includes("\n") || val.includes('"')
-          ? `"${val.replace(/"/g, '""')}"`
-          : val;
-      }
+      if (typeof val === "string") return escapeCsvCell(val);
       return String(val);
     }).join(",")
   );
@@ -249,8 +269,6 @@ function tryTabularCompaction(items: unknown[], minSavingsRatio: number): string
   if (savings < minSavingsRatio) return null;
   return schema;
 }
-
-// ─── Deduplication ───────────────────────────────────────────────────
 
 function deduplicateItems(items: unknown[]): unknown[] {
   const seen = new Set<string>();

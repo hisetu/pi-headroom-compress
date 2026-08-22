@@ -27,7 +27,26 @@ try {
   });
 
   const second = new CCRStore(30_000, databasePath);
-  assert.equal(second.retrieve(hash)?.original, "original content");
+  const firstRetrieval = second.retrieve(hash);
+  assert.equal(firstRetrieval?.original, "original content");
+  assert.equal(firstRetrieval?.retrievalCount, 1);
+  const createdAt = firstRetrieval?.createdAt;
+
+  second.store("original content", "compressed again", "test-again", "repeat_strategy");
+  const secondRetrieval = second.retrieve(hash);
+  assert.equal(secondRetrieval?.retrievalCount, 2);
+  assert.equal(secondRetrieval?.compressed, "compressed again");
+  assert.equal(secondRetrieval?.toolName, "test-again");
+  assert.equal(secondRetrieval?.createdAt, createdAt);
+
+  const shortDb = join(directory, "short.db");
+  const shortTtl = new CCRStore(1, shortDb);
+  const shortHash = shortTtl.store("original content", "compressed");
+  const start = Date.now();
+  while (Date.now() - start < 5) {}
+  shortTtl.store("original content", "recreated");
+  assert.equal(shortTtl.retrieve(shortHash)?.compressed, "recreated");
+
   assert.deepEqual(second.getGlobalSavings(), {
     tokensSaved: 400,
     costUsd: 0.002,

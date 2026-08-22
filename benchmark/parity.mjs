@@ -2,13 +2,14 @@
 /** Golden fixture parity report. Differences are reported, not hidden. */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { describeHeadroomReference, resolveHeadroomPython } from "./headroom-python.mjs";
 import { parityFixtures } from "./parity-fixtures.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
-const python = join(homedir(), ".local/share/uv/tools/headroom-ai/bin/python");
+const python = resolveHeadroomPython();
 const temporary = mkdtempSync(join(tmpdir(), "pi-headroom-parity-"));
 const fixturePath = join(temporary, "fixture.json");
 
@@ -88,6 +89,7 @@ try {
 const percent = value => value === null ? "ERR" : `${value.toFixed(1)}%`;
 
 console.log("\nHeadroom ↔ pi-headroom-compress golden parity report\n");
+console.log(`Reference Headroom: ${describeHeadroomReference()} (${python})\n`);
 console.log("Fixture                 Detection H/O       Strategy H/O              Save H/O       Markers H/O");
 console.log("────────────────────────────────────────────────────────────────────────────────────────────────");
 for (const result of results) {

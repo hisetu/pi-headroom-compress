@@ -1,6 +1,7 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { CCRStore, formatCCRMarker, extractCCRHash } from "./src/ccr-store.ts";
+import { CCRStore, isValidCCRHash } from "./src/ccr-store.ts";
 import { smartCrush, DEFAULT_CONFIG as CRUSHER_CONFIG } from "./src/smart-crusher.ts";
+import { tryParseJsonArray } from "./src/json-array-utils.ts";
 import { analyzeCacheAlignment } from "./src/cache-aligner.ts";
 import { compressCode as astCompressCode } from "./src/code-compressor.ts";
 import { applyReadLifecycle, DEFAULT_READ_LIFECYCLE_CONFIG } from "./src/read-lifecycle.ts";
@@ -8,6 +9,14 @@ import { shapeOutput, DEFAULT_OUTPUT_SHAPER_CONFIG } from "./src/output-shaper.t
 import { TOIN, DEFAULT_TOIN_CONFIG, computeSignature } from "./src/toin.ts";
 import { kompressText, isKompressAvailable, DEFAULT_KOMPRESS_CONFIG } from "./src/kompress.ts";
 import { estimateCompressionSavings } from "./src/pricing.ts";
+import {
+  capCompressedOutput,
+  getItemText,
+  isCCRReferenceContent,
+  preprocessToolOutput,
+  setItemText,
+  type InputItem,
+} from "./src/request-text.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
 // HEADROOM-COMPRESS: Pi-native context compression extension
@@ -35,14 +44,17 @@ export function detectContentType(content: string): DetectionResult {
   const trimmed = content.trim();
 
   // 1. JSON array (highest priority — SmartCrusher target)
-  if (trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) {
-        const isDictArray = parsed.length > 0 && parsed.every((item) => typeof item === "object" && item !== null && !Array.isArray(item));
-        return { type: "json_array", confidence: isDictArray ? 1.0 : 0.8, metadata: { itemCount: parsed.length, isDictArray } };
-      }
-    } catch {}
+  const jsonArray = tryParseJsonArray(trimmed);
+  if (jsonArray) {
+    return {
+      type: "json_array",
+      confidence: jsonArray.isDictArray ? 1.0 : 0.8,
+      metadata: {
+        itemCount: jsonArray.items.length,
+        isDictArray: jsonArray.isDictArray,
+        ...(jsonArray.concatenated ? { concatenated: true } : {}),
+      },
+    };
   }
 
   const lines = content.split("\n");
@@ -202,118 +214,6 @@ function detectCode(lines: string[]): DetectionResult {
   const nonEmpty = lines.filter((l) => l.trim()).length;
   const ratio = best[1] / Math.max(nonEmpty, 1);
   return { type: "source_code", confidence: Math.min(1.0, 0.4 + ratio * 0.4 + best[1] * 0.02), metadata: { language: best[0] } };
-}
-
-// ─── SmartCrusher (JSON array compression) ───────────────────────────
-
-interface SmartCrusherConfig {
-  maxItemsAfterCrush: number;
-  firstFraction: number;
-  lastFraction: number;
-  dedupIdentical: boolean;
-  minItemsToAnalyze: number;
-}
-
-const DEFAULT_CRUSHER_CONFIG: SmartCrusherConfig = {
-  maxItemsAfterCrush: 15,
-  firstFraction: 0.3,
-  lastFraction: 0.15,
-  dedupIdentical: true,
-  minItemsToAnalyze: 5,
-};
-
-function smartCrushJsonArray(content: string, query: string, config = DEFAULT_CRUSHER_CONFIG): { compressed: string; wasModified: boolean } {
-  let items: unknown[];
-  try {
-    items = JSON.parse(content);
-    if (!Array.isArray(items)) return { compressed: content, wasModified: false };
-  } catch {
-    return { compressed: content, wasModified: false };
-  }
-
-  if (items.length <= config.minItemsToAnalyze) return { compressed: content, wasModified: false };
-  if (items.length <= config.maxItemsAfterCrush) {
-    // Still try dedup
-    if (config.dedupIdentical) {
-      const deduped = deduplicateItems(items);
-      if (deduped.length < items.length) {
-        return { compressed: JSON.stringify(deduped, null, 1), wasModified: true };
-      }
-    }
-    return { compressed: content, wasModified: false };
-  }
-
-  // Dedup first
-  let working = config.dedupIdentical ? deduplicateItems(items) : items;
-  if (working.length <= config.maxItemsAfterCrush) {
-    return { compressed: JSON.stringify(working, null, 1), wasModified: working.length < items.length };
-  }
-
-  // Keep first N + last M + scored middle
-  const maxKeep = config.maxItemsAfterCrush;
-  const firstKeep = Math.max(1, Math.floor(maxKeep * config.firstFraction));
-  const lastKeep = Math.max(1, Math.floor(maxKeep * config.lastFraction));
-  const middleBudget = maxKeep - firstKeep - lastKeep;
-
-  const first = working.slice(0, firstKeep);
-  const last = working.slice(-lastKeep);
-  const middle = working.slice(firstKeep, -lastKeep);
-
-  let selectedMiddle: unknown[];
-  if (middleBudget >= middle.length) {
-    selectedMiddle = middle;
-  } else {
-    // Score middle items by relevance to query
-    const scored = middle.map((item, i) => ({
-      item,
-      score: scoreItem(item, query, i, middle.length),
-    }));
-    scored.sort((a, b) => b.score - a.score);
-    selectedMiddle = scored.slice(0, middleBudget).sort((a, b) => middle.indexOf(a.item) - middle.indexOf(b.item)).map((s) => s.item);
-  }
-
-  const result = [...first, ...selectedMiddle, ...last];
-  const omitted = items.length - result.length;
-  if (omitted > 0) {
-    (result as unknown[]).push({ _compressed: `${omitted} items omitted by headroom-compress` });
-  }
-
-  return { compressed: JSON.stringify(result, null, 1), wasModified: true };
-}
-
-function deduplicateItems(items: unknown[]): unknown[] {
-  const seen = new Set<string>();
-  const result: unknown[] = [];
-  for (const item of items) {
-    const key = JSON.stringify(item);
-    if (!seen.has(key)) {
-      seen.add(key);
-      result.push(item);
-    }
-  }
-  return result;
-}
-
-function scoreItem(item: unknown, query: string, position: number, total: number): number {
-  let score = 0;
-  const text = JSON.stringify(item).toLowerCase();
-
-  // BM25-like term matching against query
-  if (query) {
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    for (const term of terms) {
-      if (text.includes(term)) score += 0.3;
-    }
-  }
-
-  // Error/warning indicators score higher
-  if (/error|fail|exception|critical/i.test(text)) score += 0.5;
-  if (/warn|warning/i.test(text)) score += 0.2;
-
-  // Position-based recency (recent items slightly preferred)
-  score += (position / total) * 0.1;
-
-  return score;
 }
 
 // ─── Log/Build Output Compressor ─────────────────────────────────────
@@ -650,7 +550,11 @@ function compressSearch(content: string, maxResults = 20, context = ""): string 
 // ─── Main Compression Router ─────────────────────────────────────────
 
 export function compressContent(content: string, query = ""): { compressed: string; wasModified: boolean; strategy: string } {
-  if (!content || content.length < 500) return { compressed: content, wasModified: false, strategy: "passthrough" };
+  if (!content) return { compressed: content, wasModified: false, strategy: "passthrough" };
+  if (isCCRReferenceContent(content)) {
+    return { compressed: content, wasModified: false, strategy: "ccr_reference_passthrough" };
+  }
+  if (content.length < 500) return { compressed: content, wasModified: false, strategy: "passthrough" };
 
   const detection = detectContentType(content);
 
@@ -698,40 +602,25 @@ export function compressContent(content: string, query = ""): { compressed: stri
   }
 }
 
-// ─── ANSI / Cleanup utilities ────────────────────────────────────────
+export interface RequestPayload { model?: string; input?: InputItem[]; [key: string]: unknown; }
 
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+/** Apply read lifecycle and output shaping while preserving lifecycle-transformed items. */
+export function applyLifecycleAndOutputShaping(
+  payload: RequestPayload,
+  lifecycleConfig = DEFAULT_READ_LIFECYCLE_CONFIG,
+  shaperConfig = DEFAULT_OUTPUT_SHAPER_CONFIG,
+  store?: CCRStore,
+) {
+  let items = (payload.input ?? []) as InputItem[];
+  const lifecycle = applyReadLifecycle(items, lifecycleConfig, store);
+  if (lifecycle.modified) items = lifecycle.items as InputItem[];
+  const shaped = shapeOutput({ ...payload, input: items }, shaperConfig);
+  return {
+    lifecycle,
+    shaped,
+    items: (shaped.payload.input ?? items) as InputItem[],
+  };
 }
-
-function deduplicateConsecutiveLines(text: string): string {
-  const lines = text.split("\n");
-  if (lines.length < 10) return text;
-  const result: string[] = [];
-  let lastLine = "", dupeCount = 0;
-  for (const line of lines) {
-    if (line === lastLine) { dupeCount++; }
-    else {
-      if (dupeCount > 2) result.push(`  ... (${dupeCount} identical lines omitted)`);
-      else for (let i = 0; i < dupeCount; i++) result.push(lastLine);
-      result.push(line);
-      dupeCount = 0;
-      lastLine = line;
-    }
-  }
-  if (dupeCount > 2) result.push(`  ... (${dupeCount} identical lines omitted)`);
-  else for (let i = 0; i < dupeCount; i++) result.push(lastLine);
-  return result.join("\n");
-}
-
-// ─── Extension Entry Point ───────────────────────────────────────────
-
-interface InputItem {
-  role?: string; type?: string; content?: string | unknown[]; output?: string;
-  phase?: string; [key: string]: unknown;
-}
-interface ContentBlock { type?: string; text?: string; [key: string]: unknown; }
-interface RequestPayload { model?: string; input?: InputItem[]; [key: string]: unknown; }
 
 interface Stats {
   enabled: boolean;
@@ -744,27 +633,6 @@ interface Stats {
   totalSavedTokens: number;
   totalSavedUsd: number;
   strategyCounts: Record<string, number>;
-}
-
-function getItemText(item: InputItem): string {
-  if (typeof item.output === "string") return item.output;
-  if (typeof item.content === "string") return item.content;
-  if (Array.isArray(item.content)) {
-    return (item.content as ContentBlock[]).map((b) => b.text || "").join("\n");
-  }
-  return "";
-}
-
-function setItemText(item: InputItem, text: string): InputItem {
-  if (typeof item.output === "string") return { ...item, output: text };
-  if (typeof item.content === "string") return { ...item, content: text };
-  if (Array.isArray(item.content)) {
-    const newContent = (item.content as ContentBlock[]).map((b) =>
-      b.type === "output_text" && typeof b.text === "string" ? { ...b, text } : b
-    );
-    return { ...item, content: newContent };
-  }
-  return item;
 }
 
 const STATUS_SLOT = "headroom-compress";
@@ -818,20 +686,22 @@ const factory: ExtensionFactory = (pi) => {
     let modified = false;
     let totalOriginal = 0, totalCompressed = 0;
 
-    // Phase 0: Read Lifecycle — replace stale/superseded reads with markers
-    const lifecycle = applyReadLifecycle(items, DEFAULT_READ_LIFECYCLE_CONFIG, ccrStore);
+    // Phases 0–0.5: replace stale/superseded reads, then shape that transformed payload.
+    const transformed = applyLifecycleAndOutputShaping(
+      payload,
+      DEFAULT_READ_LIFECYCLE_CONFIG,
+      DEFAULT_OUTPUT_SHAPER_CONFIG,
+      ccrStore,
+    );
+    const { lifecycle, shaped } = transformed;
+    items = transformed.items;
     if (lifecycle.modified) {
-      items = lifecycle.items as InputItem[];
       modified = true;
       stats.strategyCounts["read_lifecycle_stale"] = (stats.strategyCounts["read_lifecycle_stale"] || 0) + lifecycle.readsStale;
       stats.strategyCounts["read_lifecycle_superseded"] = (stats.strategyCounts["read_lifecycle_superseded"] || 0) + lifecycle.readsSuperseded;
     }
-
-    // Phase 0.5: Output Shaper — reduce output tokens via verbosity steering + effort routing
-    const shaped = shapeOutput(payload as Record<string, unknown>, DEFAULT_OUTPUT_SHAPER_CONFIG);
     if (shaped.changed) {
       modified = true;
-      items = (shaped.payload.input ?? items) as InputItem[];
       for (const label of shaped.labels) {
         stats.strategyCounts[label] = (stats.strategyCounts[label] || 0) + 1;
       }
@@ -844,34 +714,37 @@ const factory: ExtensionFactory = (pi) => {
 
       // Only compress function_call_output and older assistant messages
       if (itemType === "function_call_output" && text.length > 500) {
-        let cleaned = stripAnsi(text);
-        cleaned = deduplicateConsecutiveLines(cleaned);
+        if (isCCRReferenceContent(text)) {
+          totalCompressed += text.length;
+          return item;
+        }
+        const cleaned = preprocessToolOutput(text);
         const result = compressContent(cleaned);
 
         if (result.wasModified) {
           modified = true;
           stats.strategyCounts[result.strategy] = (stats.strategyCounts[result.strategy] || 0) + 1;
-          const final = result.compressed.length > stats.maxOutputChars
-            ? result.compressed.slice(0, stats.maxOutputChars / 2) + `\n⟨${result.compressed.length - stats.maxOutputChars} chars omitted⟩\n` + result.compressed.slice(-stats.maxOutputChars / 2)
-            : result.compressed;
+          const final = capCompressedOutput(result.compressed, stats.maxOutputChars);
           totalCompressed += final.length;
-          // Record to TOIN
-          try {
-            const parsed = JSON.parse(cleaned);
-            if (Array.isArray(parsed)) {
-              toin.recordCompression(computeSignature(parsed), parsed.length, 0, cleaned.length, final.length, result.strategy);
-            }
-          } catch {
+          const jsonArray = tryParseJsonArray(cleaned);
+          if (jsonArray) {
+            toin.recordCompression(
+              computeSignature(jsonArray.items),
+              jsonArray.items.length,
+              0,
+              cleaned.length,
+              final.length,
+              result.strategy,
+            );
+          } else {
             toin.recordCompression({ structureHash: "text", fieldCount: 0, hasNestedObjects: false, hasArrays: false, maxDepth: 0, hasErrorField: false, hasIdField: false, hasTimestampField: false }, 1, 1, cleaned.length, final.length, result.strategy);
           }
           return setItemText(item, final);
         }
-        // Even if router didn't modify, apply size cap
         if (cleaned.length > stats.maxOutputChars) {
           modified = true;
           stats.strategyCounts["size_cap"] = (stats.strategyCounts["size_cap"] || 0) + 1;
-          const half = Math.floor(stats.maxOutputChars / 2);
-          const capped = cleaned.slice(0, half) + `\n⟨${cleaned.length - stats.maxOutputChars} chars omitted⟩\n` + cleaned.slice(-half);
+          const capped = capCompressedOutput(cleaned, stats.maxOutputChars);
           totalCompressed += capped.length;
           return setItemText(item, capped);
         }
@@ -986,28 +859,28 @@ const factory: ExtensionFactory = (pi) => {
     },
   });
 
-  // ─── CCR Retrieval Tool ─────────────────────────────────────────
-  // Register a tool the LLM can call to retrieve compressed originals
+  // ─── CCR Retrieval Command ──────────────────────────────────────
+  // Register a user command for inspecting compressed originals.
 
   pi.registerCommand("headroom-retrieve", {
-    description: "Retrieve original content by CCR hash. Usage: /headroom-retrieve <hash>",
+    description: "Preview original CCR content by hash. Usage: /headroom-retrieve <12-or-24-char-hex-hash>",
     handler: async (args: string, ctx: any) => {
       const hash = args.trim();
-      if (!hash || !/^[0-9a-f]{12}$/.test(hash)) {
-        ctx.ui.notify("Usage: /headroom-retrieve <12-char-hex-hash>", "error");
+      if (!hash || !isValidCCRHash(hash)) {
+        ctx.ui.notify("Usage: /headroom-retrieve <12-or-24-char-hex-hash>", "error");
         return;
       }
       const entry = ccrStore.retrieve(hash);
       if (!entry) {
         ctx.ui.notify(
-          `CCR entry not found or expired (hash: ${hash}). ` +
+          `CCR preview unavailable (hash: ${hash}). ` +
           `Store has ${ccrStore.size} entries. TTL is 30 minutes.`,
           "warn"
         );
         return;
       }
       ctx.ui.notify(
-        `Retrieved CCR entry ${hash} (${entry.original.length.toLocaleString()} chars, tool: ${entry.toolName || "unknown"}):\n` +
+        `CCR preview ${hash} (${entry.original.length.toLocaleString()} chars total, tool: ${entry.toolName || "unknown"}):\n` +
         entry.original.slice(0, 2000) +
         (entry.original.length > 2000 ? `\n... (${entry.original.length - 2000} more chars)` : ""),
         "info"

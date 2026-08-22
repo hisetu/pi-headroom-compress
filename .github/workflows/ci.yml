@@ -12,6 +12,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        headroom-version: ["0.27.0", "0.36.2"]
 
     steps:
       - uses: actions/checkout@v4
@@ -28,14 +32,26 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Install reference Headroom
-        run: uv tool install "headroom-ai==0.27.0"
+      - name: Install reference Headroom with code extras (${{ matrix.headroom-version }})
+        run: uv tool install "headroom-ai[code]==${{ matrix.headroom-version }}"
+
+      - name: Verify Headroom code extras
+        run: |
+          "$HOME/.local/share/uv/tools/headroom-ai/bin/python" - <<'PY'
+          import tree_sitter
+          from headroom.transforms.code_compressor import CodeAwareCompressor
+          assert tree_sitter and CodeAwareCompressor
+          PY
 
       - name: Unit tests
         run: npm test
 
       - name: Compression benchmark
         run: npm run benchmark
+        env:
+          HEADROOM_REFERENCE: headroom-ai[code]==${{ matrix.headroom-version }}
 
       - name: Golden parity regression gate
         run: npm run parity
+        env:
+          HEADROOM_REFERENCE: headroom-ai[code]==${{ matrix.headroom-version }}
