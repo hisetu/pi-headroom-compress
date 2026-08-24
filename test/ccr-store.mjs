@@ -44,8 +44,9 @@ try {
   const shortHash = shortTtl.store("original content", "compressed");
   const start = Date.now();
   while (Date.now() - start < 5) {}
-  shortTtl.store("original content", "recreated");
-  assert.equal(shortTtl.retrieve(shortHash)?.compressed, "recreated");
+  const recreatedStore = new CCRStore(30_000, shortDb);
+  recreatedStore.store("original content", "recreated");
+  assert.equal(recreatedStore.retrieve(shortHash)?.compressed, "recreated");
 
   assert.deepEqual(second.getGlobalSavings(), {
     tokensSaved: 400,

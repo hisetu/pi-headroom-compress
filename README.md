@@ -177,7 +177,7 @@ By default this resolves uv's platform-specific `headroom-ai` tool environment (
 
 ```bash
 HEADROOM_PYTHON=/path/to/python npm run benchmark
-HEADROOM_REFERENCE=headroom-ai==0.36.2 HEADROOM_PYTHON=/path/to/python npm run parity
+HEADROOM_REFERENCE=headroom-ai==0.36.5 HEADROOM_PYTHON=/path/to/python npm run parity
 ```
 
 `HEADROOM_REFERENCE` is a display label only (shown in parity/benchmark output); it does not select or validate the Python interpreter. The resolved interpreter path is printed alongside the label.
@@ -206,7 +206,7 @@ node benchmark/parity.mjs --json parity-report.json
 
 The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, Java, C, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
 
-GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI exercises Node.js 22 and 26 against both `headroom-ai[code]==0.27.0` (legacy baseline) and `headroom-ai[code]==0.36.2` (current upstream reference) in isolated matrix jobs. Each job installs the matrix-pinned Headroom with its code extras via `uv tool install` and labels the run with `HEADROOM_REFERENCE` so both versions remain observable.
+GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI exercises Node.js 22 and 26 against both `headroom-ai[code]==0.27.0` (legacy baseline) and `headroom-ai[code]==0.36.5` (current upstream reference) in isolated matrix jobs. Each job installs the matrix-pinned Headroom with its code extras via `uv tool install` and labels the run with `HEADROOM_REFERENCE` so both versions remain observable.
 
 ## Attribution
 
