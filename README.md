@@ -44,12 +44,15 @@ Add to your Pi `settings.json` packages:
 }
 ```
 
-Then install tree-sitter dependencies (for AST-based code compression):
+Pi installs the package dependencies automatically. The extension requires Node.js 22.19 or newer. Native Tree-sitter bindings are pinned to `tree-sitter >=0.25.1` for Node.js 26/C++20 compatibility.
+
+If an older checkout failed while compiling Tree-sitter, update again after pulling this fix:
 
 ```bash
-cd ~/.pi/agent/git/github.com/hisetu/pi-headroom-compress
-npm install
+pi update --extensions
 ```
+
+For local development outside Pi's package manager, run `npm install` from the package directory using the same Node.js installation that runs Pi.
 
 ## Commands
 
@@ -203,7 +206,7 @@ node benchmark/parity.mjs --json parity-report.json
 
 The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, Java, C, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
 
-GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI exercises parity against both `headroom-ai[code]==0.27.0` (legacy baseline) and `headroom-ai[code]==0.36.2` (current upstream reference) in isolated matrix jobs. Each job installs the matrix-pinned Headroom with its code extras via `uv tool install` and labels the run with `HEADROOM_REFERENCE` so both versions remain observable.
+GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI exercises Node.js 22 and 26 against both `headroom-ai[code]==0.27.0` (legacy baseline) and `headroom-ai[code]==0.36.2` (current upstream reference) in isolated matrix jobs. Each job installs the matrix-pinned Headroom with its code extras via `uv tool install` and labels the run with `HEADROOM_REFERENCE` so both versions remain observable.
 
 ## Attribution
 

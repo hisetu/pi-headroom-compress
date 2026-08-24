@@ -1,9 +1,12 @@
 {
   "name": "pi-headroom-compress",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headroom context compression via before_provider_request hook - no proxy needed",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "keywords": [
     "pi-package",
     "headroom",
@@ -23,7 +26,7 @@
     "test": "node --experimental-strip-types test/toin.mjs && node --experimental-strip-types test/ccr-store.mjs && node --experimental-strip-types test/ccr-retrieve.mjs && node --experimental-strip-types test/pricing.mjs && node --no-warnings --experimental-strip-types test/content-detector.mjs && node --no-warnings --experimental-strip-types test/ccr-marker-guard.mjs && node --no-warnings --experimental-strip-types test/json-array-utils.mjs && node --no-warnings --experimental-strip-types test/smart-crusher-tabular.mjs && node --no-warnings --experimental-strip-types test/smart-crusher-size.mjs && node --no-warnings --experimental-strip-types test/smart-crusher-deep-dedup.mjs && node --no-warnings --experimental-strip-types test/preprocess-tool-output.mjs && node --no-warnings --experimental-strip-types test/read-lifecycle-shaping.mjs && node --no-warnings --experimental-strip-types test/read-lifecycle-store.mjs && node --no-warnings --experimental-strip-types test/ccr-cap.mjs && node --no-warnings --experimental-strip-types test/request-text.mjs && node test/headroom-python.mjs"
   },
   "dependencies": {
-    "tree-sitter": "^0.25.0",
+    "tree-sitter": "^0.25.1",
     "tree-sitter-c": "^0.24.1",
     "tree-sitter-go": "^0.25.0",
     "tree-sitter-java": "^0.23.5",

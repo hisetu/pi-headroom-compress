@@ -15,6 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        node-version: [22, 26]
         headroom-version: ["0.27.0", "0.36.2"]
 
     steps:
@@ -22,7 +23,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       - uses: astral-sh/setup-uv@v6
