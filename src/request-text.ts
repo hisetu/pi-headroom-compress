@@ -23,6 +23,12 @@ function isTextBlock(block: ContentBlock): boolean {
     (block.type === undefined || block.type === "text" || block.type === "input_text" || block.type === "output_text");
 }
 
+export function isInstructionMessageItem(item: InputItem): boolean {
+  return (item.type === undefined || item.type === "message") &&
+    (item.role === "developer" || item.role === "system") &&
+    typeof item.content === "string";
+}
+
 export function getItemText(item: InputItem): string {
   if (typeof item.output === "string") return item.output;
   if (typeof item.content === "string") return item.content;

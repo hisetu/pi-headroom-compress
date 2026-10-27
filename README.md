@@ -17,7 +17,7 @@ Observed savings are ~20% on real coding sessions with Python/TypeScript tool ou
 
 ## Compatibility Scope
 
-This project ports selected ideas and behavior, not complete Headroom feature parity. Detectors, thresholds, supported formats, metadata, feedback systems, and exact compressed output may differ. The benchmark validates compression and selected marker retention; it does not establish byte parity or model-answer equivalence.
+This project ports selected ideas and behavior, not complete Headroom feature parity. Its compression behavior was originally synchronized with Headroom 0.36.2 and includes selected 0.37.0–0.40.0 safety fixes; 0.40.0 is the current parity reference, not a claim of full feature or byte parity. Detectors, thresholds, supported formats, metadata, feedback systems, and exact compressed output may differ. The benchmark validates compression and selected marker retention; it does not establish byte parity or model-answer equivalence.
 
 ## Features
 
@@ -66,6 +66,16 @@ For local development outside Pi's package manager, run `npm install` from the p
 | `/headroom-compress-config kompress off` | Disable Kompress ML (default) |
 | `/headroom-ccr-status` | Show CCR store stats |
 | `/headroom-retrieve <hash>` | Preview original CCR content by hash (first 2,000 chars) |
+
+### Model retrieval tool
+
+Compressed CCR markers direct the model to the always-active `headroom_retrieve` tool. The tool reads a bounded segment from the local SQLite store without user intervention:
+
+```json
+{ "hash": "0123456789abcdef01234567", "offset": 0, "limit": 4000 }
+```
+
+`offset` defaults to `0`; `limit` defaults to 4,000 characters and is capped at 12,000. Results report `totalChars`, `hasMore`, and `nextOffset` so the model can page only when omitted details are actually needed. Retrieved envelopes bypass preprocessing and recompression, preventing retrieve/compress loops. Missing or expired hashes instruct the model to rerun the original tool. The slash command remains available for human previews.
 
 ## Footer Status
 
@@ -134,7 +144,7 @@ These layers run before or around the content router:
 | **Read Lifecycle** | Pre-detection | Same file read twice within TTL → replace with CCR hash reference |
 | **Output Shaper** | Post-compression | Inject system prompt pressure for concise model output |
 | **TOIN** | Post-compression | Observe which strategy was used and how much was saved (learning only) |
-| **CCR Store** | Post-compression | Persist originals by hash in SQLite for on-demand preview via `/headroom-retrieve` |
+| **CCR Store** | Post-compression | Persist originals by hash in SQLite for model paging via `headroom_retrieve` and human preview via `/headroom-retrieve` |
 
 ### Decision Summary
 
@@ -163,6 +173,7 @@ Default settings (adjustable via `/headroom-compress-config`):
 | SmartCrusher max items | 15 | Keep top-N items from JSON arrays |
 | Code target rate | 0.2 | Keep ~20% of function bodies |
 | CCR TTL | 30 minutes | How long originals remain in `~/.headroom/pi-ccr-store.db` (24-hex SHA-256 keys; legacy 12-hex markers remain readable) |
+| CCR retrieve page | 4,000 chars | Default model retrieval page; hard-capped at 12,000 chars |
 | Kompress ML | off | ML text compression (~69% savings, ~5s latency) |
 
 ## Benchmark
@@ -177,7 +188,7 @@ By default this resolves uv's platform-specific `headroom-ai` tool environment (
 
 ```bash
 HEADROOM_PYTHON=/path/to/python npm run benchmark
-HEADROOM_REFERENCE=headroom-ai==0.36.5 HEADROOM_PYTHON=/path/to/python npm run parity
+HEADROOM_REFERENCE=headroom-ai==0.40.0 HEADROOM_PYTHON=/path/to/python npm run parity
 ```
 
 `HEADROOM_REFERENCE` is a display label only (shown in parity/benchmark output); it does not select or validate the Python interpreter. The resolved interpreter path is printed alongside the label.
@@ -206,7 +217,7 @@ node benchmark/parity.mjs --json parity-report.json
 
 The fixture corpus currently covers JSON arrays, git diffs, HTML, CSV, ripgrep output, build logs, Python, Java, C, C++, and plain documentation. A parity report is diagnostic evidence—not a claim that all outputs should become byte-identical, because some differences are intentional Pi adaptations.
 
-GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI exercises Node.js 22 and 26 against both `headroom-ai[code]==0.27.0` (legacy baseline) and `headroom-ai[code]==0.36.5` (current upstream reference) in isolated matrix jobs. Each job installs the matrix-pinned Headroom with its code extras via `uv tool install` and labels the run with `HEADROOM_REFERENCE` so both versions remain observable.
+GitHub Actions runs unit tests, the compression benchmark, and this regression gate on every push to `main` and every pull request. CI exercises Node.js 22 and 26 against `headroom-ai[code]==0.27.0` (legacy baseline), `headroom-ai[code]==0.36.5`, `0.37.0`, and `0.38.0` (previous references), and `headroom-ai[code]==0.40.0` (current parity reference) in isolated matrix jobs. Each job installs the matrix-pinned Headroom with its code extras via `uv tool install` and labels the run with `HEADROOM_REFERENCE` so all five versions remain observable.
 
 ## Attribution
 

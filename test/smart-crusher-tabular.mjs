@@ -14,12 +14,15 @@ const rareResult = smartCrush(JSON.stringify(withRare), "", config);
 assert.notEqual(rareResult.strategy, "tabular_compaction");
 assert.match(rareResult.compressed, /error_detail/);
 
-const nullVsEmpty = [
-  { name: "alpha", note: null },
-  { name: "beta", note: "" },
-  { name: "gamma", note: "ok" },
-];
-assert.notEqual(smartCrush(JSON.stringify(nullVsEmpty), "", config).strategy, "tabular_compaction");
+const nullVsEmpty = Array.from({ length: 12 }, (_, index) => ({
+  name: `item-${index}`,
+  note: index % 3 === 0 ? null : index % 3 === 1 ? "" : "null",
+}));
+const nullVsEmptyResult = smartCrush(JSON.stringify(nullVsEmpty), "", config);
+assert.equal(nullVsEmptyResult.strategy, "tabular_compaction");
+assert.match(nullVsEmptyResult.compressed, /item-0,null/);
+assert.match(nullVsEmptyResult.compressed, /item-1,""/);
+assert.match(nullVsEmptyResult.compressed, /item-2,"null"/);
 
 const weirdFields = [
   { "field,with\rcomma": "a", plain: "1" },

@@ -16,6 +16,8 @@
  * it is not protocol-equivalent to Headroom's proxy implementation.
  */
 
+import { isInstructionMessageItem } from "./request-text.ts";
+
 // ─── Verbosity Levels ────────────────────────────────────────────────
 
 const STEERING_SENTINEL = "<headroom_output_shaping>";
@@ -162,8 +164,10 @@ function applyVerbositySteering(items: InputItem[], level: number): boolean {
 
   const steeringBlock = `${STEERING_SENTINEL}\n${text}\n${STEERING_SUFFIX}`;
 
-  // Find the developer/system prompt item
-  const devIdx = items.findIndex((item) => item.role === "developer");
+  // Pi 1.4 can emit typed developer-role items such as `additional_tools`.
+  // Only instruction message items accept `content`; adding it to a typed
+  // tool-control item makes the OpenAI Responses API reject the request.
+  const devIdx = items.findIndex(isInstructionMessageItem);
   if (devIdx === -1) return false;
 
   const devItem = items[devIdx];

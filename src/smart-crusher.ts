@@ -230,7 +230,9 @@ function recordsHaveIdenticalFieldSets(records: Record<string, unknown>[]): stri
 }
 
 function escapeCsvCell(value: string): string {
-  return value.includes(",") || value.includes("\n") || value.includes("\r") || value.includes('"')
+  // Keep JSON null, an empty string, and the literal string "null"
+  // byte-distinguishable in the compact CSV representation.
+  return value === "" || value === "null" || value.includes(",") || value.includes("\n") || value.includes("\r") || value.includes('"')
     ? `"${value.replace(/"/g, '""')}"`
     : value;
 }
@@ -243,12 +245,10 @@ function tryTabularCompaction(items: unknown[], minSavingsRatio: number): string
   const fields = recordsHaveIdenticalFieldSets(records);
   if (!fields || fields.length < 2) return null;
 
-  if (records.some((record) => fields.some((key) => record[key] === null))) return null;
-
   const allSimple = records.every((rec) =>
     fields.every((key) => {
       const val = rec[key];
-      return typeof val === "string" || typeof val === "number" || typeof val === "boolean";
+      return val === null || typeof val === "string" || typeof val === "number" || typeof val === "boolean";
     })
   );
   if (!allSimple) return null;
@@ -257,6 +257,7 @@ function tryTabularCompaction(items: unknown[], minSavingsRatio: number): string
   const rows = records.map((rec) =>
     fields.map((key) => {
       const val = rec[key];
+      if (val === null) return "null";
       if (typeof val === "string") return escapeCsvCell(val);
       return String(val);
     }).join(",")

@@ -2,7 +2,7 @@
  * CCR (Compress-Cache-Retrieve) Store
  *
  * When content is compressed, the original is stored here with a hash key.
- * Users can preview originals on demand with `/headroom-retrieve <hash>` (first 2,000 chars).
+ * Models can retrieve bounded original segments with `headroom_retrieve`; users can also preview them with `/headroom-retrieve <hash>`.
  *
  * Storage: SQLite at ~/.headroom/pi-ccr-store.db (separate from Python Headroom).
  * Survives process restarts and /reload.
@@ -319,18 +319,18 @@ export class CCRStore {
   }
 }
 
-/** Format a CCR preview marker that the LLM sees in compressed output. */
+/** Format a CCR marker that directs the model to the retrieval tool. */
 export function formatCCRMarker(hash: string, itemCount: number): string {
-  return `⟨ccr:${hash} ${itemCount} items stored — ask the user to run /headroom-retrieve ${hash} for a preview⟩`;
+  return `⟨ccr:${hash} ${itemCount} items stored — use headroom_retrieve to access⟩`;
 }
 
 const CCR_HASH_CAPTURE = "(?:[0-9a-f]{12}|[0-9a-f]{24})";
-const LEGACY_CCR_MARKER = `⟨ccr:${CCR_HASH_CAPTURE} \\d+ items stored — use headroom_retrieve to access⟩`;
-const CURRENT_CCR_MARKER = `⟨ccr:(${CCR_HASH_CAPTURE}) \\d+ items stored — ask the user to run /headroom-retrieve \\1(?: for a preview)?⟩`;
+const TOOL_CCR_MARKER = `⟨ccr:${CCR_HASH_CAPTURE} \\d+ items stored — use headroom_retrieve to access⟩`;
+const HUMAN_CCR_MARKER = `⟨ccr:(${CCR_HASH_CAPTURE}) \\d+ items stored — ask the user to run /headroom-retrieve \\1(?: for a preview)?⟩`;
 
 /** True when a string is an exact current or legacy Pi CCR marker value. */
 export function isExactCCRMarkerValue(value: string): boolean {
-  return new RegExp(`^(?:${LEGACY_CCR_MARKER}|${CURRENT_CCR_MARKER})$`).test(value);
+  return new RegExp(`^(?:${TOOL_CCR_MARKER}|${HUMAN_CCR_MARKER})$`).test(value);
 }
 
 /** Extract CCR hash from a marker string. */

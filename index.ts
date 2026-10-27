@@ -1,5 +1,10 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { CCRStore, isValidCCRHash } from "./src/ccr-store.ts";
+import { CCRStore } from "./src/ccr-store.ts";
+import {
+  isCCRRetrievedContent,
+  registerHeadroomRetrieveTool,
+  retrieveCCRSegment,
+} from "./src/ccr-retrieve.ts";
 import { smartCrush, DEFAULT_CONFIG as CRUSHER_CONFIG } from "./src/smart-crusher.ts";
 import { tryParseJsonArray } from "./src/json-array-utils.ts";
 import { analyzeCacheAlignment } from "./src/cache-aligner.ts";
@@ -13,6 +18,7 @@ import {
   capCompressedOutput,
   getItemText,
   isCCRReferenceContent,
+  isInstructionMessageItem,
   preprocessToolOutput,
   setItemText,
   type InputItem,
@@ -84,6 +90,11 @@ export function detectContentType(content: string): DetectionResult {
   const codeResult = detectCode(sampleLines);
   if (codeResult.confidence >= 0.5) return codeResult;
 
+  // 8. Space-aligned command output (`ls -l`, `ps aux`, `docker ps`).
+  // Keep this last so a false positive only disables lossy text compression.
+  const fixedWidthResult = detectFixedWidth(content);
+  if (fixedWidthResult.confidence >= 0.6) return fixedWidthResult;
+
   return { type: "text", confidence: 0.5, metadata: {} };
 }
 
@@ -100,16 +111,55 @@ function detectDiff(lines: string[]): number {
   return Math.min(1.0, 0.5 + headers * 0.2 + changes * 0.01);
 }
 
-const SEARCH_RE = /^(?:[A-Za-z]:[\\/])?.+?:\d+(?::\d+)?:/;
-const CLOCK_LOG_RE = /^\s*\[\d{1,2}:\d{2}(?::\d{2})?\]/;
-const ISO_LOG_RE = /^\s*\d{4}-\d{2}-\d{2}[T\s]/;
+const SEARCH_RE = /^(.+?):(\d+)(?::\d+)?:\s?(.*)$/;
+const GREP_COLON_CONTEXT_RE = /^([^\s:]+):(\d+)-\s?(.*)$/;
+const GREP_DASH_CONTEXT_RE = /^([^\s:]+?)-(\d+)-\s?(.*)$/;
+const TIMESTAMP_LOG_RE = /^\s*\[?(?:\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}|\d{2}\/\d{2}\/\d{2,4}[ T]\d{1,2}:\d{2}|[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s|\]|$))/;
+
+type SearchResultLine = { file: string; lineNumber: number; body: string };
+
+function hasSafeSearchPrefix(prefix: string): boolean {
+  return !/[<>=]/.test(prefix);
+}
+
+function parseSearchResultLine(line: string): SearchResultLine | null {
+  if (TIMESTAMP_LOG_RE.test(line)) return null;
+
+  const colon = line.match(SEARCH_RE) ?? line.match(GREP_COLON_CONTEXT_RE);
+  const dash = line.match(GREP_DASH_CONTEXT_RE);
+  const validDash = dash && hasSafeSearchPrefix(dash[1]) && /[/.]/.test(dash[1]) ? dash : null;
+
+  if (colon && hasSafeSearchPrefix(colon[1])) {
+    if (validDash && validDash[1].length < colon[1].length) {
+      const betweenMarkers = colon[1].slice(validDash[1].length + 1);
+      // For `path-line-body:ref:` grep context, the colon marker belongs to
+      // the body. A slash or extension dot in between means it is instead
+      // part of a dated/dashed path, so the colon form keeps priority.
+      if (!/[/.]/.test(betweenMarkers)) {
+        return { file: validDash[1], lineNumber: Number(validDash[2]), body: validDash[3] };
+      }
+    }
+    return { file: colon[1], lineNumber: Number(colon[2]), body: colon[3] };
+  }
+
+  if (validDash) {
+    return { file: validDash[1], lineNumber: Number(validDash[2]), body: validDash[3] };
+  }
+
+  return null;
+}
+
+function isSearchResultLine(line: string): boolean {
+  return parseSearchResultLine(line) !== null;
+}
 
 function detectSearch(lines: string[]): number {
   const nonEmpty = lines.filter((l) => l.trim());
   if (nonEmpty.length === 0) return 0;
-  const matches = nonEmpty.filter((line) =>
-    !CLOCK_LOG_RE.test(line) && !ISO_LOG_RE.test(line) && SEARCH_RE.test(line)
-  ).length;
+  const matches = nonEmpty.filter(isSearchResultLine).length;
+  // One coincidental path:line: shape is not enough to classify a payload.
+  // A genuine one-line result gains nothing from search compression anyway.
+  if (matches < 2) return 0;
   const ratio = matches / nonEmpty.length;
   if (ratio < 0.3) return 0;
   return Math.min(1.0, 0.4 + ratio * 0.6);
@@ -157,6 +207,59 @@ function detectTabular(lines: string[]): DetectionResult {
   }
 
   return { type: "tabular", confidence: 0, metadata: {} };
+}
+
+const FIXED_WIDTH_LIST_RE = /^\s*(?:[-*+•]|\d{1,3}[.)])\s/;
+const FIXED_WIDTH_PROSE_END_RE = /[A-Za-z][.!?]["')\]]?$/;
+const FIXED_WIDTH_CODE_ENDS = ["{", "}", ";", "(", ")", ",", ":", "\\"];
+const FIXED_WIDTH_CODE_STARTS = ["#", "//", "/*", "--"];
+const FIXED_WIDTH_MAX_COLS = 400;
+
+function countFixedWidthGutters(lines: string[]): number {
+  const requiredHits = Math.ceil(lines.length * 0.9);
+  const hits = Array<number>(FIXED_WIDTH_MAX_COLS).fill(0);
+  for (const line of lines) {
+    const firstContent = line.length - line.trimStart().length;
+    for (let index = firstContent; index < Math.min(line.length, FIXED_WIDTH_MAX_COLS); index++) {
+      if (line[index] === " ") hits[index]++;
+    }
+  }
+
+  let gaps = 0;
+  let inGap = false;
+  for (const count of hits) {
+    const isGutter = count >= requiredHits;
+    if (isGutter && !inGap) gaps++;
+    inGap = isGutter;
+  }
+  return gaps;
+}
+
+function detectFixedWidth(content: string): DetectionResult {
+  const lines = content.split("\n").filter((line) => line.trim()).slice(0, 50).map((line) => line.trimEnd());
+  if (lines.length < 4 || lines.some((line) => line.includes("\t"))) {
+    return { type: "tabular", confidence: 0, metadata: {} };
+  }
+
+  const count = lines.length;
+  if (lines.filter((line) => FIXED_WIDTH_LIST_RE.test(line)).length / count >= 0.5) {
+    return { type: "tabular", confidence: 0, metadata: {} };
+  }
+  if (lines.filter((line) => FIXED_WIDTH_PROSE_END_RE.test(line)).length / count >= 0.3) {
+    return { type: "tabular", confidence: 0, metadata: {} };
+  }
+  const codeLike = lines.filter((line) =>
+    FIXED_WIDTH_CODE_ENDS.some((suffix) => line.endsWith(suffix)) ||
+    FIXED_WIDTH_CODE_STARTS.some((prefix) => line.trimStart().startsWith(prefix))
+  ).length;
+  if (codeLike / count >= 0.3) {
+    return { type: "tabular", confidence: 0, metadata: {} };
+  }
+
+  let gaps = countFixedWidthGutters(lines);
+  if (gaps < 2 && count >= 5) gaps = countFixedWidthGutters(lines.slice(1));
+  if (gaps < 2) return { type: "tabular", confidence: 0, metadata: {} };
+  return { type: "tabular", confidence: 0.7, metadata: { delimiter: "fixed_width", columns: gaps + 1 } };
 }
 
 const LOG_PATTERNS = [
@@ -299,7 +402,14 @@ function scoreLogLines(lines: string[]): ScoredLine[] {
   const SUMMARY_RE = /^(={3,}|-{3,}|\d+ (passed|failed)|Tests?:?\s+\d+|Total|Summary|Build.*(?:succeeded|failed))/i;
 
   let inStack = false;
+  let inPytestShortSummary = false;
   return lines.map((content, index) => {
+    const recognitionLine = content.endsWith("\r") ? content.slice(0, -1) : content;
+    const pytestSeparator = recognitionLine.startsWith("===");
+    const opensPytestSummary = pytestSeparator && recognitionLine.endsWith("===") && recognitionLine.includes("short test summary info");
+    const pytestEntry = inPytestShortSummary && /^(FAILED|ERROR)\s+\S+/.test(content);
+    if (pytestSeparator) inPytestShortSummary = opensPytestSummary;
+
     let level: LogLevel = "unknown";
     if (ERROR_RE.test(content)) level = "error";
     else if (WARN_RE.test(content)) level = "warn";
@@ -310,7 +420,7 @@ function scoreLogLines(lines: string[]): ScoredLine[] {
     if (STACK_RE.test(content)) inStack = true;
     else if (!content.trim() || !/^\s/.test(content)) inStack = false;
 
-    const isSummary = SUMMARY_RE.test(content);
+    const isSummary = SUMMARY_RE.test(content) || pytestEntry;
 
     let score = level === "error" ? 1.0 : level === "warn" ? 0.5 : level === "info" ? 0.1 : 0.05;
     if (isStackTrace) score += 0.3;
@@ -501,9 +611,9 @@ function compressSearch(content: string, maxResults = 20, context = ""): string 
   ];
 
   for (const line of lines) {
-    const match = line.match(/^(.+?):(\d+)(?::\d+)?:\s?(.*)$/);
-    if (!match) continue;
-    const [, file, lineNumber, body] = match;
+    const parsed = parseSearchResultLine(line);
+    if (!parsed) continue;
+    const { file, lineNumber, body } = parsed;
     let score = 0;
     const lower = body.toLowerCase();
     for (const word of contextWords) if (lower.includes(word)) score += 0.3;
@@ -514,7 +624,7 @@ function compressSearch(content: string, maxResults = 20, context = ""): string 
       }
     }
     if (!fileGroups.has(file)) fileGroups.set(file, []);
-    fileGroups.get(file)!.push({ line, lineNumber: Number(lineNumber), body, score: Math.min(1, score) });
+    fileGroups.get(file)!.push({ line, lineNumber, body, score: Math.min(1, score) });
   }
 
   const rankedFiles = [...fileGroups.entries()]
@@ -549,8 +659,15 @@ function compressSearch(content: string, maxResults = 20, context = ""): string 
 
 // ─── Main Compression Router ─────────────────────────────────────────
 
+export function isProtectedToolOutput(content: string): boolean {
+  return isCCRReferenceContent(content) || isCCRRetrievedContent(content);
+}
+
 export function compressContent(content: string, query = ""): { compressed: string; wasModified: boolean; strategy: string } {
   if (!content) return { compressed: content, wasModified: false, strategy: "passthrough" };
+  if (isCCRRetrievedContent(content)) {
+    return { compressed: content, wasModified: false, strategy: "ccr_retrieved_passthrough" };
+  }
   if (isCCRReferenceContent(content)) {
     return { compressed: content, wasModified: false, strategy: "ccr_reference_passthrough" };
   }
@@ -575,7 +692,9 @@ export function compressContent(content: string, query = ""): { compressed: stri
         if (astResult.wasModified) {
           return { compressed: astResult.compressed, wasModified: true, strategy: astResult.strategy };
         }
-      } catch {}
+      } catch (error) {
+        void error; // Tree-sitter support is optional; use the regex fallback below.
+      }
       // Fallback to regex-based
       const codeResult = compressCode(content);
       return { compressed: codeResult, wasModified: codeResult !== content, strategy: "code_compressor_regex" };
@@ -583,6 +702,11 @@ export function compressContent(content: string, query = ""): { compressed: stri
     case "search":
       const searchResult = compressSearch(content, 20, query);
       return { compressed: searchResult, wasModified: searchResult !== content, strategy: "search_compressor" };
+    case "html":
+    case "tabular":
+      // Preserve structured ground truth verbatim. Sending it through Kompress
+      // or generic middle truncation can silently remove cells or markup.
+      return { compressed: content, wasModified: false, strategy: "passthrough" };
     default: {
       // Plain text: try Kompress ML first
       if (kompressConfig.enabled && content.length >= kompressConfig.minCharsToCompress) {
@@ -672,7 +796,11 @@ const factory: ExtensionFactory = (pi) => {
 
   // Show initial status on session start
   pi.on("session_start" as any, async (_event: any, ctx: any) => {
-    try { ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats)); } catch {}
+    try {
+      ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats));
+    } catch (error) {
+      void error; // Status rendering must never prevent session startup.
+    }
     return undefined;
   });
 
@@ -714,7 +842,7 @@ const factory: ExtensionFactory = (pi) => {
 
       // Only compress function_call_output and older assistant messages
       if (itemType === "function_call_output" && text.length > 500) {
-        if (isCCRReferenceContent(text)) {
+        if (isProtectedToolOutput(text)) {
           totalCompressed += text.length;
           return item;
         }
@@ -789,7 +917,11 @@ const factory: ExtensionFactory = (pi) => {
     globalSavedUsd = ccrStore.getGlobalSavings().costUsd;
 
     // Update footer status
-    try { ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats)); } catch {}
+    try {
+      ctx.ui?.setStatus?.(STATUS_SLOT, formatFooterStatus(stats));
+    } catch (error) {
+      void error; // Compression must not fail when the current mode has no status UI.
+    }
 
     if (modified) {
       stats.compressedCount++;
@@ -797,6 +929,10 @@ const factory: ExtensionFactory = (pi) => {
     }
     return undefined;
   });
+
+  // The retrieval tool remains active even when compression is disabled so
+  // markers already present in the conversation can still be redeemed.
+  registerHeadroomRetrieveTool(pi, ccrStore);
 
   // ─── Commands ────────────────────────────────────────────────────
 
@@ -866,23 +1002,20 @@ const factory: ExtensionFactory = (pi) => {
     description: "Preview original CCR content by hash. Usage: /headroom-retrieve <12-or-24-char-hex-hash>",
     handler: async (args: string, ctx: any) => {
       const hash = args.trim();
-      if (!hash || !isValidCCRHash(hash)) {
-        ctx.ui.notify("Usage: /headroom-retrieve <12-or-24-char-hex-hash>", "error");
-        return;
-      }
-      const entry = ccrStore.retrieve(hash);
-      if (!entry) {
+      const result = retrieveCCRSegment(ccrStore, { hash, limit: 2_000 });
+      if (result.ok === false) {
         ctx.ui.notify(
-          `CCR preview unavailable (hash: ${hash}). ` +
-          `Store has ${ccrStore.size} entries. TTL is 30 minutes.`,
-          "warn"
+          result.code === "invalid_hash"
+            ? "Usage: /headroom-retrieve <12-or-24-char-hex-hash>"
+            : `${result.message} Store has ${ccrStore.size} entries. TTL is 30 minutes.`,
+          result.code === "invalid_hash" ? "error" : "warn",
         );
         return;
       }
       ctx.ui.notify(
-        `CCR preview ${hash} (${entry.original.length.toLocaleString()} chars total, tool: ${entry.toolName || "unknown"}):\n` +
-        entry.original.slice(0, 2000) +
-        (entry.original.length > 2000 ? `\n... (${entry.original.length - 2000} more chars)` : ""),
+        `CCR preview ${hash} (${result.totalChars.toLocaleString()} chars total, tool: ${result.toolName || "unknown"}):\n` +
+        result.content +
+        (result.hasMore ? `\n... (${result.totalChars - result.returnedChars} more chars)` : ""),
         "info"
       );
     },
@@ -896,7 +1029,7 @@ const factory: ExtensionFactory = (pi) => {
     const payload = event.payload as RequestPayload | undefined;
     if (!payload?.input) return undefined;
     const items = payload.input as InputItem[];
-    const devItem = items.find((item) => item.role === "developer");
+    const devItem = items.find(isInstructionMessageItem);
     if (!devItem) return undefined;
     const devContent = typeof devItem.content === "string" ? devItem.content : "";
     if (!devContent) return undefined;

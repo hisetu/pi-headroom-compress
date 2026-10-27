@@ -11,6 +11,10 @@ const markerHash = "a".repeat(24);
 const marker = formatCCRMarker(markerHash, 3);
 
 assert.equal(isCCRReferenceContent(marker), true);
+assert.equal(
+  isCCRReferenceContent(`⟨ccr:${markerHash} 3 items stored — ask the user to run /headroom-retrieve ${markerHash} for a preview⟩`),
+  true,
+);
 assert.equal(isCCRReferenceContent("[Read content stale: src/a.ts was modified after this read — re-read the file for current content]"), true);
 assert.equal(isCCRReferenceContent("plain tool output"), false);
 assert.equal(
